@@ -1,0 +1,44 @@
+# Go
+bin/
+*.exe
+*.test
+*.prof
+*.cover
+coverage.txt
+*.out
+vendor/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+
+# Docker
+docker-data/
+
+# Supabase
+.supabase/
+
+# Credentials
+credentials.json
+token.json
+*.pem
+*.key
+
+# Temporary
+tmp/
+log/

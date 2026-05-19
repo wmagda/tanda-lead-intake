@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  tanda-db:
+    image: supabase/postgres:15.8.1.009
+    container_name: tanda-db
+    environment:
+      POSTGRES_PASSWORD: tanda_dev_pass
+      POSTGRES_USER: tanda
+      POSTGRES_DB: tanda
+    ports:
+      - "54322:5432"
+    volumes:
+      - tanda-pg:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d
+    command: ["postgres", "-c", "max_connections=200"]
+
+volumes:
+  tanda-pg:
