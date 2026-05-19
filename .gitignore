@@ -38,6 +38,10 @@ credentials.json
 token.json
 *.pem
 *.key
+*.p12
+service-account*.json
+secrets.json
+oauth*.json
 
 # Temporary
 tmp/

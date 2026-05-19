@@ -7,9 +7,9 @@ import (
 )
 
 // NewTasksHandler handles POST /api/leads/:id/task.
-func NewTasksHandler(pool *db.Pool) *TasksHandler { return &TasksHandler{pool: pool} }
+func NewTasksHandler(_ interface{}) *TasksHandler { return &TasksHandler{} }
 
-type TasksHandler struct{ pool *db.Pool }
+type TasksHandler struct{}
 
 // Create adds a follow-up task for a lead.
 func (h *TasksHandler) Create(c *gin.Context) {

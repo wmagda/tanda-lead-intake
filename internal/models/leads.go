@@ -15,6 +15,7 @@ type Lead struct {
 	RequestedTime    *string    `json:"requested_time,omitempty"`
 	Status           *string    `json:"status,omitempty"`
 	Priority         *string    `json:"priority,omitempty"`
+	AIConfidence     *float64   `json:"ai_confidence,omitempty"`
 	Notes            *string    `json:"notes,omitempty"`
 	CreatedAt        *time.Time `json:"created_at,omitempty"`
 	UpdatedAt        *time.Time `json:"updated_at,omitempty"`

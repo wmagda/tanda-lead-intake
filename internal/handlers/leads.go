@@ -7,9 +7,9 @@ import (
 )
 
 // NewLeadsHandler handles GET /api/leads and GET /api/leads/:id.
-func NewLeadsHandler(pool *db.Pool) *LeadsHandler { return &LeadsHandler{pool: pool} }
+func NewLeadsHandler(_ interface{}) *LeadsHandler { return &LeadsHandler{} }
 
-type LeadsHandler struct{ pool *db.Pool }
+type LeadsHandler struct{}
 
 // List returns the lead queue, optionally filtered by status/request_type.
 // GET /api/leads?status=new&request_type=private_lesson
