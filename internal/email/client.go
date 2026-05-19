@@ -54,24 +54,18 @@ type Client struct {
 //
 // Env vars:
 //
-//	AI_BASE_URL or LMSTUDIO_BASE_URL — e.g. http://localhost:1234/v1
-//	AI_MODEL or LMSTUDIO_MODEL       — model tag loaded in LM Studio (default: "local-model")
-//	AI_API_KEY                       — optional for local servers
+//	OPENAI_BASE_URL — e.g. http://localhost:1234/v1
+//	OPENAI_MODEL    — model tag loaded in LM Studio (default: "local-model")
+//	OPENAI_API_KEY  — required by LM Studio (can be a dummy value like "lm-studio")
 func NewAIClientFromEnv() *Client {
-	baseURL := os.Getenv("AI_BASE_URL")
+	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
-		baseURL = os.Getenv("LMSTUDIO_BASE_URL")
-	}
-	if baseURL == "" {
-		log.Println("[ai] AI_BASE_URL/LMSTUDIO_BASE_URL not set — AI parsing disabled")
+		log.Println("[ai] OPENAI_BASE_URL not set — AI parsing disabled")
 		return &Client{HTTPClient: &http.Client{Timeout: 30 * time.Second}}
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
 
-	model := os.Getenv("AI_MODEL")
-	if model == "" {
-		model = os.Getenv("LMSTUDIO_MODEL")
-	}
+	model := os.Getenv("OPENAI_MODEL")
 	if model == "" {
 		model = "local-model"
 	}
@@ -207,7 +201,7 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 		return nil, "", fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey := os.Getenv("AI_API_KEY"); apiKey != "" {
+	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
