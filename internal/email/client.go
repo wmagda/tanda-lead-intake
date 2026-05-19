@@ -121,8 +121,8 @@ func clampConfidence(f float64) float64 {
 	return f
 }
 
-// toLead converts ParseResult into a *models.Lead, clamping/validating enums.
-func (r ParseResult) toLead() *models.Lead {
+// ToLead converts ParseResult into a *models.Lead, clamping/validating enums.
+func (r ParseResult) ToLead() *models.Lead {
 	lead := &models.Lead{}
 
 	if r.Parsed.Intent != nil {
@@ -241,7 +241,7 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 		return nil, "", fmt.Errorf("json unmarshal (%q): %w", raw, err)
 	}
 
-	lead := pr.toLead()
+	lead := pr.ToLead()
 	return lead, pr.Draft, nil
 }
 

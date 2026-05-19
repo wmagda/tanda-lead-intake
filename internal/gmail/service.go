@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/wmagda/tanda-lead-intake/internal/db"
 	"github.com/wmagda/tanda-lead-intake/internal/email"
-	"github.com/wmagda/tanda-lead-intake/internal/models"
 )
 
 // Service wraps the Gmail polling loop and reply sending.

@@ -6,7 +6,6 @@ bin/
 *.cover
 coverage.txt
 *.out
-vendor/
 
 # Env
 .env

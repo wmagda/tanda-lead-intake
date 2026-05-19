@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -35,7 +34,7 @@ func NewPool() (*Pool, error) {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	// quick ping
-	ctx, cancel := contextWithTimeout(3 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()

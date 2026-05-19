@@ -6,11 +6,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/wmagda/tanda-lead-intake/internal/email"
-	"github.com/wmagda/tanda-lead-intake/internal/models"
 )
 
-func intPtr(n int) *int       { return &n }
-func boolPtr(b bool) *bool    { return &b }
+func intPtr(n int) *int          { return &n }
+func boolPtr(b bool) *bool       { return &b }
 func stringPtr(s string) *string { return &s }
 
 // ── toLead conversion ────────────────────────────────────────────────
@@ -44,7 +43,7 @@ func minimalParseResult() *email.ParseResult {
 
 func TestParseResult_toLead_ValidIntent(t *testing.T) {
 	pr := minimalParseResult()
-	lead := pr.toLead()
+	lead := pr.ToLead()
 	if lead.RequestType == nil || *lead.RequestType != "private_lesson" {
 		t.Fatalf("expected intent private_lesson, got %v", lead.RequestType)
 	}
@@ -64,7 +63,7 @@ func TestParseResult_toLead_InvalidIntentFallsBack(t *testing.T) {
 		}{Intent: &i},
 		Draft: "test",
 	}
-	lead := pr.toLead()
+	lead := pr.ToLead()
 	if lead.RequestType == nil || *lead.RequestType != "general_question" {
 		t.Fatalf("expected fallback general_question, got %v", lead.RequestType)
 	}
@@ -76,7 +75,7 @@ func TestParseResult_toLead_AllValidIntents(t *testing.T) {
 		t.Run(intent, func(t *testing.T) {
 			pr := minimalParseResult()
 			pr.Parsed.Intent = &intent
-			lead := pr.toLead()
+			lead := pr.ToLead()
 			if lead.RequestType == nil || *lead.RequestType != intent {
 				t.Fatalf("expected %s, got %v", intent, lead.RequestType)
 			}
@@ -90,7 +89,7 @@ func TestParseResult_toLead_AllValidStyles(t *testing.T) {
 		t.Run(s, func(t *testing.T) {
 			pr := minimalParseResult()
 			pr.Parsed.DanceStyle = &s
-			lead := pr.toLead()
+			lead := pr.ToLead()
 			if lead.DanceStyle == nil || *lead.DanceStyle != s {
 				t.Fatalf("expected %s, got %v", s, lead.DanceStyle)
 			}
@@ -104,7 +103,7 @@ func TestParseResult_toLead_AllValidLevels(t *testing.T) {
 		t.Run(l, func(t *testing.T) {
 			pr := minimalParseResult()
 			pr.Parsed.Level = &l
-			lead := pr.toLead()
+			lead := pr.ToLead()
 			if lead.Level == nil || *lead.Level != l {
 				t.Fatalf("expected %s, got %v", l, lead.Level)
 			}
@@ -117,7 +116,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 		pr := minimalParseResult()
 		c := 0.75
 		pr.Parsed.Confidence = &c
-		lead := pr.toLead()
+		lead := pr.ToLead()
 		if *lead.AIConfidence != 0.75 {
 			t.Fatalf("expected 0.75, got %v", *lead.AIConfidence)
 		}
@@ -126,7 +125,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 		pr := minimalParseResult()
 		c := 1.5
 		pr.Parsed.Confidence = &c
-		lead := pr.toLead()
+		lead := pr.ToLead()
 		if *lead.AIConfidence != 1.0 {
 			t.Fatalf("expected 1.0, got %v", *lead.AIConfidence)
 		}
@@ -135,7 +134,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 		pr := minimalParseResult()
 		c := -0.3
 		pr.Parsed.Confidence = &c
-		lead := pr.toLead()
+		lead := pr.ToLead()
 		if *lead.AIConfidence != 0.0 {
 			t.Fatalf("expected 0.0, got %v", *lead.AIConfidence)
 		}
@@ -155,7 +154,7 @@ func TestParseResult_toLead_OptionalFieldsNil(t *testing.T) {
 		}{},
 		Draft: "",
 	}
-	lead := pr.toLead()
+	lead := pr.ToLead()
 	if lead.StudentCount != nil {
 		t.Fatalf("expected nil student_count, got %v", *lead.StudentCount)
 	}

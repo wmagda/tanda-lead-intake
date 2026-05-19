@@ -132,11 +132,11 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, req ProcessRequest,
 		req.GmailThreadID,
 		senderEmail,
 		sOrNil(displayName),
-		sOrNil(ai.RequestType),
-		sOrNil(ai.DanceStyle),
-		sOrNil(ai.Level),
+		ptrStrOrNil(ai.RequestType),
+		ptrStrOrNil(ai.DanceStyle),
+		ptrStrOrNil(ai.Level),
 		i32OrNil(ai.StudentCount),
-		sOrNil(ai.RequestedTime),
+		ptrStrOrNil(ai.RequestedTime),
 		"new",
 		"normal",
 		fPtrOrNil(ai.AIConfidence),
@@ -210,6 +210,13 @@ func sOrNil(v string) any {
 		return nil
 	}
 	return v
+}
+
+func ptrStrOrNil(p *string) any {
+	if p == nil || strings.TrimSpace(*p) == "" {
+		return nil
+	}
+	return *p
 }
 
 func i32OrNil(p *int32) any {

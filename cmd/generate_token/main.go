@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -96,7 +97,11 @@ func main() {
 		fmt.Printf("authorised as %q\n", profile.EmailAddress)
 	}
 
-	if err := os.WriteFile(tokenPath, []byte(tok.ToJSON()), 0600); err != nil {
+	tokenJSON, err := json.Marshal(tok)
+	if err != nil {
+		log.Fatalf("marshal token: %v", err)
+	}
+	if err := os.WriteFile(tokenPath, tokenJSON, 0600); err != nil {
 		log.Fatalf("write %s: %v", tokenPath, err)
 	}
 	fmt.Printf("token saved to %s\n\n", tokenPath)

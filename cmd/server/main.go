@@ -31,10 +31,7 @@ func main() {
 	aiClient := email.NewAIClientFromEnv()
 
 	// Gmail polling service (background).
-	gmailSvc, err := gmail.NewPollingService(pool, aiClient)
-	if err != nil {
-		log.Fatalf("gmail service: %v", err)
-	}
+	gmailSvc := gmail.NewPollingService(pool, aiClient)
 	go gmailSvc.Start()
 
 	r := gin.Default()
@@ -60,8 +57,7 @@ func main() {
 		api.POST("/leads/:id/task", tasks.Create)
 
 		// ── Email processing (called by Gmail webhook/poll) ───────────
-		process := handlers.NewProcessHandler(pool, aiClient, gmailSvc)
-		api.POST("/email/process", process.Process)
+		api.POST("/email/process", handlers.NewProcessHandler(pool.Pool, aiClient, gmailSvc))
 	}
 
 	port := os.Getenv("PORT")
