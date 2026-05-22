@@ -41,7 +41,7 @@ func (s *Service) loop() {
 	for {
 		select {
 		case <-ticker.C:
-			// TODO: implement Gmail history.delta list / recent threads fetch
+			// TODO: fetch new messages via Gmail API, then call ingest.Process per message
 		case <-s.stopCh:
 			log.Println("[gmail] polling stopped")
 			return

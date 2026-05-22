@@ -1,6 +1,7 @@
 package email_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -12,32 +13,20 @@ func intPtr(n int) *int          { return &n }
 func boolPtr(b bool) *bool       { return &b }
 func stringPtr(s string) *string { return &s }
 
-// ── toLead conversion ────────────────────────────────────────────────
-
 func minimalParseResult() *email.ParseResult {
 	i := "private_lesson"
 	d := "salsa"
 	l := "beginner"
 	c := 0.96
 	return &email.ParseResult{
-		Parsed: struct {
-			Intent        *string  `json:"intent"`
-			DanceStyle    *string  `json:"dance_style"`
-			Level         *string  `json:"level"`
-			StudentCount  *int     `json:"student_count"`
-			RequestedTime *string  `json:"requested_time"`
-			NeedsPricing  *bool    `json:"needs_pricing"`
-			Confidence    *float64 `json:"confidence"`
-		}{
-			Intent:        &i,
-			DanceStyle:    &d,
-			Level:         &l,
-			StudentCount:  intPtr(2),
-			RequestedTime: stringPtr("Tuesday evening"),
-			NeedsPricing:  boolPtr(true),
-			Confidence:    &c,
-		},
-		Draft: "Hi! Thanks for reaching out to Salsa Collective.",
+		Intent:        &i,
+		DanceStyle:    &d,
+		Level:         &l,
+		StudentCount:  intPtr(2),
+		RequestedTime: stringPtr("Tuesday evening"),
+		NeedsPricing:  boolPtr(true),
+		Confidence:    &c,
+		Draft:         "Hi! Thanks for reaching out to Salsa Collective.",
 	}
 }
 
@@ -51,18 +40,7 @@ func TestParseResult_toLead_ValidIntent(t *testing.T) {
 
 func TestParseResult_toLead_InvalidIntentFallsBack(t *testing.T) {
 	i := "totally_bogus"
-	pr := &email.ParseResult{
-		Parsed: struct {
-			Intent        *string  `json:"intent"`
-			DanceStyle    *string  `json:"dance_style"`
-			Level         *string  `json:"level"`
-			StudentCount  *int     `json:"student_count"`
-			RequestedTime *string  `json:"requested_time"`
-			NeedsPricing  *bool    `json:"needs_pricing"`
-			Confidence    *float64 `json:"confidence"`
-		}{Intent: &i},
-		Draft: "test",
-	}
+	pr := &email.ParseResult{Intent: &i, Draft: "test"}
 	lead := pr.ToLead()
 	if lead.RequestType == nil || *lead.RequestType != "general_question" {
 		t.Fatalf("expected fallback general_question, got %v", lead.RequestType)
@@ -74,7 +52,7 @@ func TestParseResult_toLead_AllValidIntents(t *testing.T) {
 	for _, intent := range intents {
 		t.Run(intent, func(t *testing.T) {
 			pr := minimalParseResult()
-			pr.Parsed.Intent = &intent
+			pr.Intent = &intent
 			lead := pr.ToLead()
 			if lead.RequestType == nil || *lead.RequestType != intent {
 				t.Fatalf("expected %s, got %v", intent, lead.RequestType)
@@ -88,7 +66,7 @@ func TestParseResult_toLead_AllValidStyles(t *testing.T) {
 	for _, s := range styles {
 		t.Run(s, func(t *testing.T) {
 			pr := minimalParseResult()
-			pr.Parsed.DanceStyle = &s
+			pr.DanceStyle = &s
 			lead := pr.ToLead()
 			if lead.DanceStyle == nil || *lead.DanceStyle != s {
 				t.Fatalf("expected %s, got %v", s, lead.DanceStyle)
@@ -102,7 +80,7 @@ func TestParseResult_toLead_AllValidLevels(t *testing.T) {
 	for _, l := range levels {
 		t.Run(l, func(t *testing.T) {
 			pr := minimalParseResult()
-			pr.Parsed.Level = &l
+			pr.Level = &l
 			lead := pr.ToLead()
 			if lead.Level == nil || *lead.Level != l {
 				t.Fatalf("expected %s, got %v", l, lead.Level)
@@ -115,7 +93,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 	t.Run("within range", func(t *testing.T) {
 		pr := minimalParseResult()
 		c := 0.75
-		pr.Parsed.Confidence = &c
+		pr.Confidence = &c
 		lead := pr.ToLead()
 		if *lead.AIConfidence != 0.75 {
 			t.Fatalf("expected 0.75, got %v", *lead.AIConfidence)
@@ -124,7 +102,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 	t.Run("above 1.0", func(t *testing.T) {
 		pr := minimalParseResult()
 		c := 1.5
-		pr.Parsed.Confidence = &c
+		pr.Confidence = &c
 		lead := pr.ToLead()
 		if *lead.AIConfidence != 1.0 {
 			t.Fatalf("expected 1.0, got %v", *lead.AIConfidence)
@@ -133,7 +111,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 	t.Run("below 0.0", func(t *testing.T) {
 		pr := minimalParseResult()
 		c := -0.3
-		pr.Parsed.Confidence = &c
+		pr.Confidence = &c
 		lead := pr.ToLead()
 		if *lead.AIConfidence != 0.0 {
 			t.Fatalf("expected 0.0, got %v", *lead.AIConfidence)
@@ -142,18 +120,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 }
 
 func TestParseResult_toLead_OptionalFieldsNil(t *testing.T) {
-	pr := &email.ParseResult{
-		Parsed: struct {
-			Intent        *string  `json:"intent"`
-			DanceStyle    *string  `json:"dance_style"`
-			Level         *string  `json:"level"`
-			StudentCount  *int     `json:"student_count"`
-			RequestedTime *string  `json:"requested_time"`
-			NeedsPricing  *bool    `json:"needs_pricing"`
-			Confidence    *float64 `json:"confidence"`
-		}{},
-		Draft: "",
-	}
+	pr := &email.ParseResult{Draft: ""}
 	lead := pr.ToLead()
 	if lead.StudentCount != nil {
 		t.Fatalf("expected nil student_count, got %v", *lead.StudentCount)
@@ -166,7 +133,26 @@ func TestParseResult_toLead_OptionalFieldsNil(t *testing.T) {
 	}
 }
 
-// ── SystemPrompt integrity ───────────────────────────────────────────
+func TestParseResult_Unmarshal_FlatPromptShape(t *testing.T) {
+	raw := `{
+		"intent": "private_lesson",
+		"dance_style": "salsa",
+		"level": "beginner",
+		"student_count": 2,
+		"ai_confidence": 0.9,
+		"draft": "Hello!"
+	}`
+	var pr email.ParseResult
+	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
+		t.Fatal(err)
+	}
+	if pr.Intent == nil || *pr.Intent != "private_lesson" {
+		t.Fatalf("intent: %v", pr.Intent)
+	}
+	if pr.Draft != "Hello!" {
+		t.Fatalf("draft: %q", pr.Draft)
+	}
+}
 
 func TestSystemPrompt_ValidUTF8(t *testing.T) {
 	if !utf8.ValidString(email.SystemPrompt) {
@@ -196,8 +182,6 @@ func TestSystemPrompt_ContainsRequiredKeywords(t *testing.T) {
 		}
 	}
 }
-
-// ── UserPrompt format ───────────────────────────────────────────────
 
 func TestUserPrompt_ContainsSenderAndSubject(t *testing.T) {
 	p := email.UserPrompt("alice@example.com", "Hello", "body text")

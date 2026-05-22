@@ -29,7 +29,7 @@ func NewPool() (*Pool, error) {
 	cfg.MinConns = 2
 	cfg.HealthCheckPeriod = 30 * time.Second
 
-	pool, err := pgxpool.NewWithConfig(nil, cfg)
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}

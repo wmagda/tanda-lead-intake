@@ -7,10 +7,16 @@ lint: ## temporarily disabled — go not installed on this node
 	@echo "lint skipped (Go toolchain not present on host)"
 
 test:
-	@echo "not yet implemented"
+	go test ./...
 
-run: ## requires Go 1.23
-	go run ./cmd/server
+run: ## Gmail + ingest worker (no HTTP)
+	go run ./cmd/worker
+
+ingest-test: ## one-shot ingest for local testing
+	go run ./cmd/process-email \
+	  -thread thread-test-001 -message msg-test-$$(date +%s) \
+	  -from 'Jane Doe <jane@example.com>' -subject 'Private lesson?' \
+	  -body 'Hi, beginner, Tuesday evening.'
 
 migrate-up:
 	@echo "Apply supabase/migrations/v1__init.sql via Supabase SQL Editor or CLI"

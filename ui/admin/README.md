@@ -3,6 +3,10 @@
 This folder holds the front-end design reference for the tanda admin queue
 that lives inside the existing Salsa Collective Lovable admin panel.
 
+**Integration model:** The Go worker in this repo only **writes** to Postgres
+(leads, threads, pending drafts). Lovable reads and updates the same Supabase
+tables directly — it does **not** call the Go worker over HTTP.
+
 ## Component map
 
 ### InboxQueue (route: `/admin/inbox`)
@@ -40,11 +44,14 @@ Sections:
 5. **Tasks** — follow-up task list from `tasks`
 6. **Activity log** — notes + status transitions
 
-Actions (primary buttons):
-- `Approve & Send` → `POST /api/leads/:id/approve`
-- `Save Draft` → persist edited draft_text
-- `Add Task` → `POST /api/leads/:id/task`
-- `Mark Closed` → `PUT /api/leads/:id` with `status=closed`
+Actions (primary buttons) — via **Supabase** / Lovable backend (not the Go worker):
+
+- `Approve & Send` → update `draft_responses` (`approval_status=approved`), send Gmail from Lovable, set `sent_at`
+- `Save Draft` → update `draft_responses.draft_text`
+- `Add Task` → insert into `tasks`
+- `Mark Closed` → update `leads.status`
+
+The Go worker only **ingests** inbound mail and creates `pending` drafts. It never sends email.
 
 ### Dashboard Widgets
 

@@ -21,6 +21,8 @@ create table if not exists leads (
   updated_at      timestamptz not null default now()
 );
 
+create unique index if not exists idx_leads_gmail_thread_id on leads(gmail_thread_id);
+
 create index if not exists idx_leads_status       on leads(status);
 create index if not exists idx_leads_request_type on leads(request_type);
 create index if not exists idx_leads_created_at    on leads(created_at desc);
