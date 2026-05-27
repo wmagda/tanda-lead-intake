@@ -225,6 +225,8 @@ Lovable should use the **Supabase JavaScript client** (or your existing Lovable 
 | Schema + local Docker | Done |
 | Ingest + AI parse + pending drafts | Done |
 | `make ingest-test` | Working |
-| Gmail polling → ingest | TODO |
-| Lovable `/admin/inbox` | TODO (Supabase-backed) |
+| Gmail polling → ingest | Done |
+| LLM lead filtering + contact extraction | Done |
+| Retry on transient AI failures | Done |
+| Lovable `/admin/inbox` | Ready (schema + queries documented) |
 | Approve & send from Lovable | TODO |

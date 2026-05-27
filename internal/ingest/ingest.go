@@ -208,33 +208,32 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 	var draftUUID *string
 
 	note := fmt.Sprintf("ingested from gmail: %s", time.Now().Format(time.RFC3339))
-	if customerPhone != "" {
-		note += fmt.Sprintf("\nphone: %s", customerPhone)
-	}
 
 	row := tx.QueryRow(ctx, `
 		insert into leads (
-			gmail_thread_id, customer_email, customer_name,
+			gmail_thread_id, customer_email, customer_name, customer_phone,
 			request_type, dance_style, level,
 			student_count, requested_time, status, priority, ai_confidence, notes
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		on conflict (gmail_thread_id) do update
 		set
-			customer_email = excluded.customer_email,
-			customer_name  = excluded.customer_name,
+			customer_email = coalesce(excluded.customer_email, leads.customer_email),
+			customer_name  = coalesce(excluded.customer_name, leads.customer_name),
+			customer_phone = coalesce(excluded.customer_phone, leads.customer_phone),
 			request_type   = excluded.request_type,
 			dance_style    = excluded.dance_style,
 			level          = excluded.level,
 			student_count  = excluded.student_count,
 			requested_time = excluded.requested_time,
 			ai_confidence  = excluded.ai_confidence,
-			notes          = leads.notes || chr(10) || $12,
+			notes          = leads.notes || chr(10) || $13,
 			updated_at     = now()
 		returning id
 	`,
 		msg.GmailThreadID,
 		senderEmail,
 		sOrNil(displayName),
+		sOrNil(customerPhone),
 		ptrStrOrNil(ai.RequestType),
 		ptrStrOrNil(ai.DanceStyle),
 		ptrStrOrNil(ai.Level),

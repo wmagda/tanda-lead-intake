@@ -8,6 +8,7 @@ create table if not exists leads (
   gmail_thread_id text,
   customer_name   text,
   customer_email  text,
+  customer_phone  text,
   request_type    text,          -- private_lesson | group_class | pricing | teacher_request | general_question
   dance_style     text,          -- salsa | bachata | kizomba | …
   level           text,          -- beginner | intermediate | advanced
