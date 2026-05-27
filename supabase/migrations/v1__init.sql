@@ -9,7 +9,7 @@ create table if not exists leads (
   customer_name   text,
   customer_email  text,
   customer_phone  text,
-  request_type    text,          -- private_lesson | group_class | pricing | teacher_request | general_question
+  request_type    text,          -- private_lesson | group_class | event_booking | pricing | teacher_request | general_question
   dance_style     text,          -- salsa | bachata | kizomba | …
   level           text,          -- beginner | intermediate | advanced
   student_count   integer,
@@ -18,6 +18,7 @@ create table if not exists leads (
   priority        text default 'normal',
   notes           text,
   ai_confidence   numeric,       -- 0-1 from LLM parse
+  received_at     timestamptz,   -- when the original email arrived in Gmail
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
@@ -59,14 +60,16 @@ create index if not exists idx_draft_responses_approval_on  on draft_responses(a
 
 -- ── tasks ─────────────────────────────────────────────────────
 create table if not exists tasks (
-  id          uuid primary key default gen_random_uuid(),
-  lead_id     uuid references leads(id) on delete cascade,
-  task_type   text not null,         -- follow_up | teacher_assign | reminder
-  status      text not null default 'open',
-  assigned_to text,
-  due_date    timestamptz,
-  notes       text,
-  created_at  timestamptz not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  lead_id       uuid references leads(id) on delete cascade,
+  task_type     text not null,         -- follow_up | teacher_assign | reminder
+  status        text not null default 'open',
+  assigned_to   text,
+  assignee_email text,                 -- email address to notify the assignee
+  notified_at   timestamptz,           -- NULL = notification not yet sent
+  due_date      timestamptz,
+  notes         text,
+  created_at    timestamptz not null default now()
 );
 
 create index if not exists idx_tasks_lead_id   on tasks(lead_id);

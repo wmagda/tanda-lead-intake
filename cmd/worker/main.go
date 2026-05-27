@@ -27,8 +27,9 @@ func main() {
 
 	gmailSvc := gmail.NewPollingService(pool, aiClient)
 	gmailSvc.Start()
+	gmailSvc.StartDraftSender()
 
-	log.Println("tanda worker running (Gmail poll + DB ingest; no HTTP API)")
+	log.Println("tanda worker running (Gmail poll + DB ingest + draft sender; no HTTP API)")
 	log.Println("press Ctrl+C to stop")
 
 	sig := make(chan os.Signal, 1)

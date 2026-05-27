@@ -24,6 +24,7 @@ type Message struct {
 	From           string
 	Subject        string
 	Body           string
+	ReceivedAt     time.Time // when Gmail received the message (InternalDate)
 }
 
 // Result is returned after a successful ingest.
@@ -82,6 +83,7 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	}
 	if !pr.IsLeadIntent() {
 		log.Printf("[ingest] skipped msg=%s: not a potential client (is_lead=false)", msg.GmailMessageID)
+		recordSkipped(ctx, pool, msg)
 		return Result{Status: "skipped", SkipReason: "not a lead"}, nil
 	}
 
@@ -101,6 +103,7 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	custName, custEmail, custPhone := resolveCustomer(msg, formRelay, voiceRelay, &pr, displayName, envelopeEmail)
 	if custEmail == "" && custPhone == "" {
 		log.Printf("[ingest] skipped msg=%s: no customer contact", msg.GmailMessageID)
+		recordSkipped(ctx, pool, msg)
 		return Result{Status: "skipped", SkipReason: "no customer contact"}, nil
 	}
 	log.Printf("[ingest] customer %q <%s> phone=%q", custName, custEmail, custPhone)
@@ -193,6 +196,20 @@ func resolveCustomer(msg Message, formRelay, voiceRelay bool, pr *ai.ParseResult
 	return name, email, phone
 }
 
+// recordSkipped inserts into email_threads with lead_id=NULL so the message
+// is recognized as already-processed on future runs (avoids re-running the LLM).
+func recordSkipped(ctx context.Context, pool *pgxpool.Pool, msg Message) {
+	_, envelopeEmail := parseutil.SenderFrom(msg.From)
+	_, err := pool.Exec(ctx, `
+		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body)
+		values ($1, null, $2, $3, $4, $5, $6)
+		on conflict (gmail_message_id) do nothing
+	`, mustUUID(), msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body))
+	if err != nil {
+		log.Printf("[ingest] warning: failed to record skipped msg=%s: %v", msg.GmailMessageID, err)
+	}
+}
+
 func logTruncate(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if max <= 0 || len(s) <= max {
@@ -209,12 +226,17 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 
 	note := fmt.Sprintf("ingested from gmail: %s", time.Now().Format(time.RFC3339))
 
+	var receivedAt any
+	if !msg.ReceivedAt.IsZero() {
+		receivedAt = msg.ReceivedAt
+	}
+
 	row := tx.QueryRow(ctx, `
 		insert into leads (
 			gmail_thread_id, customer_email, customer_name, customer_phone,
 			request_type, dance_style, level,
-			student_count, requested_time, status, priority, ai_confidence, notes
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			student_count, requested_time, status, priority, ai_confidence, received_at, notes
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		on conflict (gmail_thread_id) do update
 		set
 			customer_email = coalesce(excluded.customer_email, leads.customer_email),
@@ -226,7 +248,8 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 			student_count  = excluded.student_count,
 			requested_time = excluded.requested_time,
 			ai_confidence  = excluded.ai_confidence,
-			notes          = leads.notes || chr(10) || $13,
+			received_at    = coalesce(leads.received_at, excluded.received_at),
+			notes          = leads.notes || chr(10) || $14,
 			updated_at     = now()
 		returning id
 	`,
@@ -242,6 +265,7 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 		"new",
 		"normal",
 		fPtrOrNil(ai.AIConfidence),
+		receivedAt,
 		note,
 	)
 	if err := row.Scan(&leadID); err != nil {
