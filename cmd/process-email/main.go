@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/wmagda/tanda-lead-intake/internal/ai"
 	"github.com/wmagda/tanda-lead-intake/internal/db"
-	"github.com/wmagda/tanda-lead-intake/internal/email"
 	"github.com/wmagda/tanda-lead-intake/internal/ingest"
 )
 
@@ -40,11 +40,11 @@ func main() {
 	}
 	defer pool.Close()
 
-	ai := email.NewAIClientFromEnv()
-	ctx, cancel := context.WithTimeout(context.Background(), email.RequestTimeout()+30*time.Second)
+	aiClient := ai.NewClientFromEnv()
+	ctx, cancel := context.WithTimeout(context.Background(), ai.RequestTimeout()+30*time.Second)
 	defer cancel()
 
-	result, err := ingest.Process(ctx, pool.Pool, ai, ingest.Message{
+	result, err := ingest.Process(ctx, pool.Pool, aiClient, ingest.Message{
 		GmailThreadID:  *threadID,
 		GmailMessageID: *messageID,
 		From:           *from,

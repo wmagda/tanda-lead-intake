@@ -1,4 +1,4 @@
-package email_test
+package ai_test
 
 import (
 	"encoding/json"
@@ -6,19 +6,19 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/wmagda/tanda-lead-intake/internal/email"
+	"github.com/wmagda/tanda-lead-intake/internal/ai"
 )
 
 func intPtr(n int) *int          { return &n }
 func boolPtr(b bool) *bool       { return &b }
 func stringPtr(s string) *string { return &s }
 
-func minimalParseResult() *email.ParseResult {
+func minimalParseResult() *ai.ParseResult {
 	i := "private_lesson"
 	d := "salsa"
 	l := "beginner"
 	c := 0.96
-	return &email.ParseResult{
+	return &ai.ParseResult{
 		Intent:        &i,
 		DanceStyle:    &d,
 		Level:         &l,
@@ -40,7 +40,7 @@ func TestParseResult_toLead_ValidIntent(t *testing.T) {
 
 func TestParseResult_toLead_InvalidIntentFallsBack(t *testing.T) {
 	i := "totally_bogus"
-	pr := &email.ParseResult{Intent: &i, Draft: "test"}
+	pr := &ai.ParseResult{Intent: &i, Draft: "test"}
 	lead := pr.ToLead()
 	if lead.RequestType == nil || *lead.RequestType != "general_question" {
 		t.Fatalf("expected fallback general_question, got %v", lead.RequestType)
@@ -120,7 +120,7 @@ func TestParseResult_toLead_ConfidenceClamped(t *testing.T) {
 }
 
 func TestParseResult_toLead_OptionalFieldsNil(t *testing.T) {
-	pr := &email.ParseResult{Draft: ""}
+	pr := &ai.ParseResult{Draft: ""}
 	lead := pr.ToLead()
 	if lead.StudentCount != nil {
 		t.Fatalf("expected nil student_count, got %v", *lead.StudentCount)
@@ -142,7 +142,7 @@ func TestParseResult_Unmarshal_FlatPromptShape(t *testing.T) {
 		"ai_confidence": 0.9,
 		"draft": "Hello!"
 	}`
-	var pr email.ParseResult
+	var pr ai.ParseResult
 	if err := json.Unmarshal([]byte(raw), &pr); err != nil {
 		t.Fatal(err)
 	}
@@ -155,19 +155,19 @@ func TestParseResult_Unmarshal_FlatPromptShape(t *testing.T) {
 }
 
 func TestSystemPrompt_ValidUTF8(t *testing.T) {
-	if !utf8.ValidString(email.SystemPrompt) {
+	if !utf8.ValidString(ai.SystemPrompt) {
 		t.Fatal("SystemPrompt contains invalid UTF-8")
 	}
 }
 
 func TestSystemPrompt_SizeOk(t *testing.T) {
-	if len(email.SystemPrompt) > 12_000 {
-		t.Fatalf("SystemPrompt is %d bytes — too large for most context windows", len(email.SystemPrompt))
+	if len(ai.SystemPrompt) > 12_000 {
+		t.Fatalf("SystemPrompt is %d bytes — too large for most context windows", len(ai.SystemPrompt))
 	}
 }
 
 func TestSystemPrompt_ContainsRequiredKeywords(t *testing.T) {
-	lower := strings.ToLower(email.SystemPrompt)
+	lower := strings.ToLower(ai.SystemPrompt)
 	required := []string{
 		"private_lesson", "group_class", "pricing",
 		"beginner", "intermediate", "advanced",
@@ -183,8 +183,22 @@ func TestSystemPrompt_ContainsRequiredKeywords(t *testing.T) {
 	}
 }
 
+func TestParseResult_IsLeadIntent(t *testing.T) {
+	falseVal := false
+	if (&ai.ParseResult{IsLead: &falseVal}).IsLeadIntent() {
+		t.Fatal("expected false")
+	}
+	trueVal := true
+	if !(&ai.ParseResult{IsLead: &trueVal}).IsLeadIntent() {
+		t.Fatal("expected true")
+	}
+	if (&ai.ParseResult{}).IsLeadIntent() {
+		t.Fatal("nil is_lead should be false")
+	}
+}
+
 func TestUserPrompt_ContainsSenderAndSubject(t *testing.T) {
-	p := email.UserPrompt("alice@example.com", "Hello", "body text")
+	p := ai.UserPrompt("alice@example.com", "Hello", "body text", false, false)
 	if !strings.Contains(p, "alice@example.com") {
 		t.Error("UserPrompt should contain sender email")
 	}

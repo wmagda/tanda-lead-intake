@@ -10,7 +10,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/wmagda/tanda-lead-intake/internal/db"
-	"github.com/wmagda/tanda-lead-intake/internal/email"
+	"github.com/wmagda/tanda-lead-intake/internal/ai"
 	"github.com/wmagda/tanda-lead-intake/internal/gmail"
 )
 
@@ -23,7 +23,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	aiClient := email.NewAIClientFromEnv()
+	aiClient := ai.NewClientFromEnv()
 
 	gmailSvc := gmail.NewPollingService(pool, aiClient)
 	gmailSvc.Start()

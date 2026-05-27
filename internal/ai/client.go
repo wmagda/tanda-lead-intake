@@ -1,4 +1,4 @@
-package email
+package ai
 
 import (
 	"bytes"
@@ -16,7 +16,11 @@ import (
 	"github.com/wmagda/tanda-lead-intake/internal/models"
 )
 
-const defaultRequestTimeout = 10 * time.Minute
+const (
+	defaultRequestTimeout = 10 * time.Minute
+	defaultRetryMax       = 3
+	defaultRetryBase      = 2 * time.Second
+)
 
 // ChatMessage represents a single message in the LLM conversation.
 type ChatMessage struct {
@@ -76,7 +80,7 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// NewAIClientFromEnv reads env vars and returns a configured Client.
+// NewClientFromEnv reads env vars and returns a configured Client.
 //
 // Env vars:
 //
@@ -84,7 +88,7 @@ type Client struct {
 //	OPENAI_MODEL    — model tag loaded in LM Studio (default: "local-model")
 //	OPENAI_API_KEY  — required by LM Studio (can be a dummy value like "lm-studio")
 //	OPENAI_TIMEOUT  — LLM request timeout, e.g. 10m (default 10m for slow local models)
-func NewAIClientFromEnv() *Client {
+func NewClientFromEnv() *Client {
 	timeout := RequestTimeout()
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
@@ -125,9 +129,41 @@ func RequestTimeout() time.Duration {
 	return defaultRequestTimeout
 }
 
+// RetryMax returns how many times to call the LLM for one email (env OPENAI_RETRY_MAX, default 3).
+func RetryMax() int {
+	s := strings.TrimSpace(os.Getenv("OPENAI_RETRY_MAX"))
+	if s == "" {
+		return defaultRetryMax
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		log.Printf("[ai] invalid OPENAI_RETRY_MAX %q, using %d", s, defaultRetryMax)
+		return defaultRetryMax
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
+}
+
+func retryBaseDelay() time.Duration {
+	s := strings.TrimSpace(os.Getenv("OPENAI_RETRY_BASE"))
+	if s == "" {
+		return defaultRetryBase
+	}
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return defaultRetryBase
+}
+
 // ParseResult is the deserialized LLM output before domain conversion.
 // Matches the flat JSON shape in SystemPrompt; also accepts legacy {"parsed":{...}}.
 type ParseResult struct {
+	IsLead        *bool    `json:"is_lead"`
+	CustomerEmail *string  `json:"customer_email"`
+	CustomerName  *string  `json:"customer_name"`
+	CustomerPhone *string  `json:"customer_phone"`
 	Intent        *string  `json:"intent"`
 	DanceStyle    *string  `json:"dance_style"`
 	Level         *string  `json:"level"`
@@ -138,11 +174,16 @@ type ParseResult struct {
 	Draft         string   `json:"draft"`
 }
 
+// IsLeadIntent returns whether this message should create a lead (must be explicitly true).
+func (r ParseResult) IsLeadIntent() bool {
+	return r.IsLead != nil && *r.IsLead
+}
+
 // UnmarshalJSON accepts flat prompt output or nested {"parsed":{...},"draft":"..."}.
 func (r *ParseResult) UnmarshalJSON(data []byte) error {
 	type flat ParseResult
 	var f flat
-	if err := json.Unmarshal(data, &f); err == nil && (f.Intent != nil || f.Draft != "" || f.DanceStyle != nil) {
+	if err := json.Unmarshal(data, &f); err == nil && (f.Intent != nil || f.Draft != "" || f.DanceStyle != nil || f.IsLead != nil || f.CustomerEmail != nil) {
 		*r = ParseResult(f)
 		return nil
 	}
@@ -176,7 +217,6 @@ func (r *ParseResult) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// validIntents enforces the enum at conversion time.
 var validIntents = map[string]bool{
 	"private_lesson":   true,
 	"group_class":      true,
@@ -194,8 +234,12 @@ var validLevels = map[string]bool{
 }
 
 func clampConfidence(f float64) float64 {
-	if f < 0 { return 0 }
-	if f > 1 { return 1 }
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
 	return f
 }
 
@@ -244,19 +288,79 @@ func (r ParseResult) ToLead() *models.Lead {
 	return lead
 }
 
-// isEnabled returns true when the client has a BaseURL configured.
 func (c *Client) isEnabled() bool {
 	return c.BaseURL != "" && strings.HasPrefix(c.BaseURL, "http")
 }
 
-// isDisabled is true when the client was constructed with no URL.
 func (c *Client) isDisabled() bool { return !c.isEnabled() }
 
-// ParseExtracted sends the email to the local LLM and returns structured lead info + draft.
-func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body string) (*models.Lead, string, error) {
+// ParseExtracted sends the email to the local LLM and returns structured parse output.
+// Transient failures (HTTP 5xx, network, empty choices) are retried with backoff.
+func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool) (ParseResult, error) {
+	var empty ParseResult
 	if c.BaseURL == "" {
-		return nil, "", fmt.Errorf("AI base URL not configured")
+		return empty, fmt.Errorf("AI base URL not configured")
 	}
+
+	maxAttempts := RetryMax()
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		pr, err := c.parseExtractedOnce(ctx, sender, subject, body, formRelay, voiceRelay)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("[ai] parse succeeded on attempt %d/%d", attempt, maxAttempts)
+			}
+			return pr, nil
+		}
+		lastErr = err
+		if !isRetryableParseError(err) || attempt == maxAttempts {
+			return empty, err
+		}
+		delay := retryBaseDelay() * time.Duration(attempt)
+		log.Printf("[ai] parse attempt %d/%d failed (retry in %s): %s",
+			attempt, maxAttempts, delay, truncateErr(err, 200))
+		select {
+		case <-ctx.Done():
+			return empty, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return empty, lastErr
+}
+
+func isRetryableParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "http do:") {
+		return true
+	}
+	if strings.Contains(msg, "read response:") {
+		return true
+	}
+	if strings.Contains(msg, "LLM HTTP 429") || strings.Contains(msg, "LLM HTTP 5") {
+		return true
+	}
+	if strings.Contains(msg, "LLM returned no choices") {
+		return true
+	}
+	if strings.Contains(msg, "decode response:") {
+		return true
+	}
+	return false
+}
+
+func truncateErr(err error, max int) string {
+	s := err.Error()
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
+}
+
+func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool) (ParseResult, error) {
+	var empty ParseResult
 
 	bodyPreview := body
 	if len(bodyPreview) > 4000 {
@@ -270,19 +374,19 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 
 		Messages: []ChatMessage{
 			{Role: "system", Content: SystemPrompt},
-			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview)},
+			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview, formRelay, voiceRelay)},
 		},
 	}
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(reqBody); err != nil {
-		return nil, "", fmt.Errorf("encode request: %w", err)
+		return empty, fmt.Errorf("encode request: %w", err)
 	}
 
 	endpoint := c.BaseURL + "/chat/completions"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &buf)
 	if err != nil {
-		return nil, "", fmt.Errorf("new request: %w", err)
+		return empty, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
@@ -291,34 +395,38 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("http do: %w", err)
+		return empty, fmt.Errorf("http do: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", fmt.Errorf("read response: %w", err)
+		return empty, fmt.Errorf("read response: %w", err)
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return nil, "", fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		snip := strings.TrimSpace(string(respBody))
+		if len(snip) > 300 {
+			snip = snip[:300] + "…"
+		}
+		return empty, fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, snip)
 	}
 
 	var chatResp ChatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, "", fmt.Errorf("decode response: %w", err)
+		return empty, fmt.Errorf("decode response: %w", err)
 	}
 
 	if chatResp.Error != nil && chatResp.Error.Message != "" {
-		return nil, "", fmt.Errorf("LLM error: %s", chatResp.Error.Message)
+		return empty, fmt.Errorf("LLM error: %s", chatResp.Error.Message)
 	}
 	if len(chatResp.Choices) == 0 {
-		return nil, "", fmt.Errorf("LLM returned no choices")
+		return empty, fmt.Errorf("LLM returned no choices")
 	}
 
 	choice := chatResp.Choices[0]
 	raw, err := extractJSONObject(choiceMessageText(choice))
 	if err != nil {
-		return nil, "", fmt.Errorf("%w (finish_reason=%q)", err, choice.FinishReason)
+		return empty, fmt.Errorf("%w (finish_reason=%q)", err, choice.FinishReason)
 	}
 
 	var pr ParseResult
@@ -327,15 +435,11 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 		if len(snip) > 200 {
 			snip = snip[:200] + "…"
 		}
-		return nil, "", fmt.Errorf("json unmarshal (%q): %w", snip, err)
+		return empty, fmt.Errorf("json unmarshal (%q): %w", snip, err)
 	}
 
-	lead := pr.ToLead()
-	return lead, pr.Draft, nil
+	return pr, nil
 }
-
-// StringPtr helper.
-func stringPtr(s string) *string { return &s }
 
 func normalizeBaseURL(u string) string {
 	u = strings.TrimRight(u, "/")
@@ -365,7 +469,6 @@ func extractJSONObject(s string) (string, error) {
 	if start < 0 {
 		return "", fmt.Errorf("no JSON object in model output (%d chars)", len(s))
 	}
-	// Decode only the first JSON value — models often append prose after the object.
 	dec := json.NewDecoder(strings.NewReader(s[start:]))
 	var raw json.RawMessage
 	if err := dec.Decode(&raw); err != nil {

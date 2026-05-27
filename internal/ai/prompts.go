@@ -1,5 +1,4 @@
-// prompts.go — system prompt and user-prompt template for email parsing.
-package email
+package ai
 
 import "fmt"
 
@@ -35,9 +34,13 @@ const SystemPrompt = `You are an intake assistant for [STUDIO-NAME], a Latin dan
 
 ## Your job
 
-Read the incoming customer email and return ONLY valid JSON with this exact structure:
+Read the incoming message and return ONLY valid JSON with this exact structure:
 
 {
+  "is_lead": true|false,
+  "customer_email": "<visitor email or null>",
+  "customer_name": "<visitor name or null>",
+  "customer_phone": "<phone number or null, e.g. Google Voice>",
   "intent": "private_lesson | group_class | pricing | teacher_request | general_question",
   "dance_style": "salsa | bachata | both | other",
   "level": "beginner | intermediate | advanced | not_specified",
@@ -45,8 +48,33 @@ Read the incoming customer email and return ONLY valid JSON with this exact stru
   "requested_time": "<free-text description of when they want to start, or null>",
   "needs_pricing": true|false,
   "ai_confidence": <float 0.0–1.0>,
-  "draft": "<warm, professional reply draft — 1–3 short paragraphs>"
+  "draft": "<warm, professional reply draft — 1–3 short paragraphs, or empty string if is_lead=false>"
 }
+
+### is_lead — you decide (no hardcoded sender lists)
+
+Use judgment on each message. The studio receives many kinds of mail; only create a lead when a **real person might be trying to reach the studio about dancing**.
+
+Set **is_lead=true** for:
+- Direct emails from prospective or current students (questions, scheduling, pricing, classes)
+- Website contact form submissions (envelope is often a relay like Resend — read the body)
+- **Google Voice** SMS or voicemail notifications forwarded to Gmail (extract name/phone from the notification text; customer_email may be null, set customer_phone)
+
+Set **is_lead=false** for anything that is clearly **not** a customer trying to reach the studio, including:
+- Payment processor and merchant notifications (sales reports, payouts, transaction alerts)
+- Automated receipts, invoices, shipping, bank alerts, subscription renewals
+- Marketing, newsletters, social networks, platform admin mail
+- Calendar invites, password resets, verification codes, auto-replies, delivery failures
+- Internal or operational mail with no student inquiry
+
+Do not maintain a mental blocklist of brand names — reason about whether a human is asking about classes/lessons/the studio. When is_lead=false, set draft="" and other fields may be null.
+
+### Contact extraction
+
+- **Direct email:** customer_email and customer_name usually come from the envelope From.
+- **Website form relay:** envelope From is NOT the customer — read Email/Name/Message fields from the body.
+- **Google Voice:** parse caller name and phone from the notification; set customer_phone, customer_email null if unknown.
+- Never set customer_email to payment platforms, noreply relays, or the studio's own address unless that person is actually the inquirer.
 
 ### Intent definitions
 
@@ -78,12 +106,21 @@ Read the incoming customer email and return ONLY valid JSON with this exact stru
 Return ONLY the JSON object. No markdown, no explanation, no trailing newline after the object.`
 
 // UserPrompt builds the per-email prompt.
-func UserPrompt(sender, subject, body string) string {
-	return fmt.Sprintf(`Incoming email from %q with subject %q:
+func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool) string {
+	note := ""
+	switch {
+	case voiceRelay:
+		note = "This is a Google Voice SMS/voicemail notification. The envelope From is NOT the customer. " +
+			"Extract customer_name and customer_phone from the subject/body (e.g. \"New text message from (269) 290-9011\"). " +
+			"Set customer_email to null. Never use [VOICE-NOREPLY] as customer_email.\n\n"
+	case formRelay:
+		note = "The envelope sender is the studio website contact-form relay (e.g. Resend) — extract the visitor's email and name from the body, not from the From header.\n\n"
+	}
+	return fmt.Sprintf(`%sIncoming email (envelope From) %q with subject %q:
 
 ---
 %s
 ---
 
-Return the JSON object now.`, sender, subject, body)
+Return the JSON object now.`, note, sender, subject, body)
 }

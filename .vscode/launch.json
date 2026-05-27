@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Worker",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/worker",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "showLog": true
+    },
+    {
+      "name": "Worker (start Postgres)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/worker",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "preLaunchTask": "docker-up",
+      "showLog": true
+    },
+    {
+      "name": "process-email (ingest test)",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/process-email",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "args": [
+        "-thread",
+        "thread-debug-001",
+        "-message",
+        "msg-debug-001",
+        "-from",
+        "Jane Doe <jane@example.com>",
+        "-subject",
+        "Private lesson?",
+        "-body",
+        "Hi, beginner, Tuesday evening."
+      ],
+      "preLaunchTask": "docker-up",
+      "showLog": true
+    }
+  ]
+}
