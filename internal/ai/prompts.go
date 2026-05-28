@@ -76,6 +76,7 @@ Do not maintain a mental blocklist of brand names — reason about whether a hum
 - **Website form relay:** envelope From is NOT the customer — read Email/Name/Message fields from the body.
 - **Google Voice:** parse caller name and phone from the notification; set customer_phone, customer_email null if unknown.
 - Never set customer_email to payment platforms, noreply relays, or the studio's own address unless that person is actually the inquirer.
+- Never set customer_phone to the studio's number [STUDIO-PHONE] or [STUDIO-EMAIL] contact line — that appears in our own signatures and quoted replies. Only the inquirer's phone. Ignore phone numbers in quoted previous messages / our outbound drafts in the thread.
 
 ### Intent definitions
 

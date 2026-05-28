@@ -48,7 +48,7 @@ func TestParseResult_toLead_InvalidIntentFallsBack(t *testing.T) {
 }
 
 func TestParseResult_toLead_AllValidIntents(t *testing.T) {
-	intents := []string{"private_lesson", "group_class", "pricing", "teacher_request", "general_question"}
+	intents := []string{"private_lesson", "group_class", "event_booking", "pricing", "teacher_request", "general_question"}
 	for _, intent := range intents {
 		t.Run(intent, func(t *testing.T) {
 			pr := minimalParseResult()

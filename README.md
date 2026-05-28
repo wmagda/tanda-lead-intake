@@ -13,9 +13,10 @@ AI-powered inbox that never loses a lead.
 1. **Watches the studio Gmail inbox** (polling; webhook later).
 2. **Parses each new message** with a local LLM (LM Studio) into structured lead fields.
 3. **Writes to Postgres** (Supabase in prod, Docker locally): lead, email thread, and a **pending draft reply**.
-4. **Does not send email** and **does not expose an HTTP API**.
+4. **Sends approved replies and task notifications** via Gmail when Lovable marks them ready in the DB.
+5. **Does not expose an HTTP API** — Lovable talks to Supabase only.
 
-Staff review and send replies in **Lovable**, which talks to the **same database** (and will call Gmail on approve). The Go worker can run on your Mac or a small VM without exposing ports to the internet.
+The Go worker can run on your Mac or a small VM without exposing ports to the internet.
 
 ---
 
@@ -28,14 +29,14 @@ flowchart LR
   AI --> Worker
   Worker --> DB[(Postgres / Supabase)]
   Lovable[Lovable admin] --> DB
-  Lovable --> GmailSend[Gmail send on approve]
+  Worker --> Gmail
 ```
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Go worker** (`cmd/worker`) | Gmail poll → `internal/ingest` → DB. No HTTP server. |
+| **Go worker** (`cmd/worker`) | Gmail poll → ingest → DB; send approved drafts + task emails |
 | **Postgres** | `leads`, `email_threads`, `draft_responses`, `tasks` |
-| **Lovable** | Inbox UI, edit drafts, approve, **send** replies, tasks, status |
+| **Lovable** | Inbox UI, edit drafts, approve, assign tasks, update status |
 | **LM Studio** | OpenAI-compatible `/v1/chat/completions` on your LAN |
 
 Lovable never calls the Go worker. Use the same `DATABASE_URL` (Supabase) in prod and local Docker for dev.
@@ -49,10 +50,10 @@ For each new Gmail message, the worker (or `cmd/process-email` in tests):
 | Table | Content |
 |-------|---------|
 | `leads` | Customer, intent (`request_type`), style, level, confidence, `status=new` |
-| `email_threads` | Raw message (deduped by `gmail_message_id`) |
+| `email_threads` | Raw message (deduped by `gmail_message_id`; `lead_id` NULL for skipped non-leads) |
 | `draft_responses` | **Proposed reply** — `draft_text`, `approval_status=pending` |
 
-Outbound mail only happens when Lovable approves and sends (not implemented in this repo yet).
+**Outbound mail:** Lovable sets `draft_responses.approval_status=approved`. The worker polls and sends via Gmail, then sets `sent_at`. Task assignee emails work the same way via `tasks.notified_at`.
 
 ---
 
@@ -136,7 +137,7 @@ docker exec -it tanda-db psql -U tanda -d tanda -c \
 make run
 ```
 
-Polls Gmail on an interval; **fetch/ingest from Gmail is still TODO** in `internal/gmail` — use `make ingest-test` until polling is wired.
+Polls Gmail on `GMAIL_POLL_INTERVAL` (default `2m`), ingests new messages, and runs the send loop on `SEND_POLL_INTERVAL` (default `30s`).
 
 ---
 
@@ -145,15 +146,16 @@ Polls Gmail on an interval; **fetch/ingest from Gmail is still TODO** in `intern
 ```
 tanda-lead-intake/
 ├── cmd/
-│   ├── worker/           # long-running Gmail + ingest worker (no HTTP)
+│   ├── worker/           # long-running Gmail + ingest + send worker
 │   ├── process-email/    # one-shot ingest CLI for local testing
 │   └── generate_token/   # Gmail OAuth setup
 ├── internal/
 │   ├── db/               # Postgres pool
 │   ├── ingest/           # dedupe, AI parse, transactional DB writes
-│   ├── email/            # LM Studio client + prompts
-│   ├── gmail/            # polling loop + send stub (send → Lovable)
-│   └── models/           # structs matching SQL tables
+│   ├── ai/               # LM Studio client + prompts
+│   ├── gmail/            # polling, approved-draft send, task notifications
+│   ├── parseutil/        # sender/contact/phone helpers
+│   └── models/           # Lead DTO from AI parse (partial table mirror)
 ├── supabase/migrations/  # schema (v1)
 ├── ui/admin/             # Lovable UI design notes
 ├── docker-compose.yml    # local Postgres on :54322
@@ -183,9 +185,15 @@ tanda-lead-intake/
 | `OPENAI_MODEL` | for AI | Exact model id as shown in LM Studio |
 | `OPENAI_API_KEY` | for AI | LM Studio API key |
 | `OPENAI_TIMEOUT` | no | Default `10m` — increase for slow local models |
+| `OPENAI_RETRY_MAX` | no | LLM retries on transient errors (default `3`) |
+| `OPENAI_RETRY_BASE` | no | Backoff base (default `2s`) |
 | `GMAIL_CREDENTIALS` | for Gmail | Path to OAuth client JSON |
 | `GMAIL_TOKEN` | for Gmail | Path to `token.json` |
 | `GMAIL_USER_EMAIL` | for Gmail | Inbox to monitor |
+| `GMAIL_FORM_FROM` | no | Comma-separated form relay addresses (e.g. Resend) |
+| `GMAIL_INITIAL_LOOKBACK` | no | First poll window on startup (default `24h`, try `7d` for backfill) |
+| `GMAIL_POLL_INTERVAL` | no | Inbox poll interval (default `2m`) |
+| `SEND_POLL_INTERVAL` | no | Approved drafts + task notify poll (default `30s`) |
 
 ---
 
@@ -193,20 +201,21 @@ tanda-lead-intake/
 
 See [`ui/admin/README.md`](ui/admin/README.md) for screen specs.
 
-Lovable should use the **Supabase JavaScript client** (or your existing Lovable backend) to:
+Lovable should use the **Supabase JavaScript client** to:
 
 - List/filter `leads` and join `draft_responses` / `email_threads`
 - Show and edit `draft_responses.draft_text`
-- On **Approve & Send**: set `approval_status=approved`, send via Gmail API, set `sent_at`
-- Manage `tasks` and `leads.status`
+- On **Approve**: set `approval_status=approved` (worker sends email and sets `sent_at`)
+- Manage `tasks` (`assignee_email`, `assigned_to`) and `leads.status`
 
 ---
 
 ## Safety
 
-- The Go worker **never** sends customer email (`gmail.SendReply` is a stub).
-- Drafts are always created with `approval_status = pending`.
-- Human approval and send happen only in Lovable.
+- Ingest always creates drafts with `approval_status = pending`.
+- **Customer email is only sent** after a human approves in Lovable (`approval_status=approved`).
+- The worker sends from the studio Gmail account; it does not auto-send on ingest.
+- Re-run `go run ./cmd/generate_token` if OAuth `token.json` expires.
 
 ---
 
@@ -228,5 +237,7 @@ Lovable should use the **Supabase JavaScript client** (or your existing Lovable 
 | Gmail polling → ingest | Done |
 | LLM lead filtering + contact extraction | Done |
 | Retry on transient AI failures | Done |
+| Approved draft + task email send | Done |
 | Lovable `/admin/inbox` | Ready (schema + queries documented) |
-| Approve & send from Lovable | TODO |
+| Operational / vendor inbox (non-leads) | Not started |
+| Venmo / payments | Deferred |

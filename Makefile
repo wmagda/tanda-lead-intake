@@ -1,7 +1,7 @@
 .PHONY: fmt lint test run migrate-up migrate-down docker-up docker-down
 
 fmt:
-	gofmt -s -w internal/ cmd/ pkg/
+	gofmt -s -w internal/ cmd/
 
 lint: ## temporarily disabled — go not installed on this node
 	@echo "lint skipped (Go toolchain not present on host)"

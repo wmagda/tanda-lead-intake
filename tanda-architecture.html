@@ -349,6 +349,7 @@
           <li>• Deduplicate by Gmail message ID</li>
           <li>• Call LM Studio to extract structured lead data</li>
           <li>• Write leads + threads + drafts to Supabase</li>
+          <li>• Send approved drafts + task notifications via Gmail</li>
           <li>• No HTTP API — admin UI is separate</li>
         </ul>
       </div>
@@ -378,6 +379,7 @@
           <li>• React/Next.js frontend</li>
           <li>• Talks directly to Supabase (no backend)</li>
           <li>• Lead queue, approval flow, detail view</li>
+          <li>• Approve drafts in DB — worker sends Gmail</li>
           <li>• Mutations via Supabase client SDK</li>
           <li>• Auth handled by Supabase Auth</li>
         </ul>
@@ -406,7 +408,7 @@
           <li>• cmd/worker/main.go — entry point</li>
           <li>• internal/ingest/ingest.go — core logic</li>
           <li>• internal/gmail/service.go — polling</li>
-          <li>• internal/ai/client.go — AI client</li>
+          <li>• internal/ai/ — LM Studio client + prompts</li>
           <li>• internal/db/pool.go — Postgres pool</li>
         </ul>
       </div>

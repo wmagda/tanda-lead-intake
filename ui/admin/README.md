@@ -46,7 +46,7 @@ Sections:
 
 Actions (primary buttons) — via **Supabase** / Lovable backend (not the Go worker):
 
-- `Approve & Send` → update `draft_responses` (`approval_status=approved`), send Gmail from Lovable, set `sent_at`
+- `Approve & Send` → update `draft_responses` (`approval_status=approved`); Go worker sends via Gmail and sets `sent_at`
 - `Save Draft` → update `draft_responses.draft_text`
 - `Add Task` → insert into `tasks`
 - `Mark Closed` → update `leads.status`

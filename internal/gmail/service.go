@@ -136,13 +136,24 @@ func (s *Service) poll() {
 
 		ctx, cancel := context.WithTimeout(context.Background(), ai.RequestTimeout()+30*time.Second)
 
+		studioReplied := false
+		if s.gmailSvc != nil && !msg.Date.IsZero() {
+			replied, rerr := ThreadHasStudioReplyAfter(s.gmailSvc, msg.ThreadID, s.selfEmail, msg.Date.UnixMilli())
+			if rerr != nil {
+				log.Printf("[gmail] thread reply check msg=%s: %v", msg.MessageID, rerr)
+			} else {
+				studioReplied = replied
+			}
+		}
+
 		result, err := ingest.Process(ctx, s.pool.Pool, s.aiClient, ingest.Message{
-			GmailThreadID:  msg.ThreadID,
-			GmailMessageID: msg.MessageID,
-			From:           msg.From,
-			Subject:        msg.Subject,
-			Body:           msg.Body,
-			ReceivedAt:     msg.Date,
+			GmailThreadID:      msg.ThreadID,
+			GmailMessageID:     msg.MessageID,
+			From:               msg.From,
+			Subject:            msg.Subject,
+			Body:               msg.Body,
+			ReceivedAt:         msg.Date,
+			StudioRepliedAfter: studioReplied,
 		})
 		cancel()
 
@@ -164,8 +175,8 @@ func (s *Service) poll() {
 		}
 
 		ingested++
-		log.Printf("[gmail] [%d/%d] ingested lead=%s intent=%q confidence=%.2f draft=%v",
-			n, total, result.LeadID, result.Intent, result.Confidence, result.DraftID != nil)
+		log.Printf("[gmail] [%d/%d] %s lead=%s intent=%q confidence=%.2f draft=%v",
+			n, total, result.Status, result.LeadID, result.Intent, result.Confidence, result.DraftID != nil)
 	}
 
 	s.advanceWatermark(watermark, now)
@@ -296,7 +307,8 @@ func (s *Service) pollApprovedDrafts() {
 			// For Google Voice notifications, reply in-thread — Google Voice
 			// forwards the reply as SMS to the original caller.
 			if voiceSender, ok := isGoogleVoiceThread(d.LeadID, s.pool); ok {
-				sendErr := s.sendReplyInThread(ctx, d.GmailThreadID, voiceSender, d.DraftText)
+				subject := threadReplySubject(d.LeadID, s.pool)
+				sendErr := s.sendReplyInThread(ctx, d.GmailThreadID, voiceSender, subject, d.DraftText)
 				if sendErr != nil {
 					log.Printf("[send] FAILED voice-sms draft=%s lead=%s to=%s: %v", d.DraftID, d.LeadID, voiceSender, sendErr)
 				} else {
@@ -315,10 +327,11 @@ func (s *Service) pollApprovedDrafts() {
 		}
 
 		var sendErr error
-		if isFormRelayThread(d.GmailThreadID, d.LeadID, s.pool) {
+		if isFormRelayLead(d.LeadID, s.pool) {
 			sendErr = s.sendNewEmail(ctx, d.CustomerEmail, d.CustomerName, d.DraftText)
 		} else {
-			sendErr = s.sendReplyInThread(ctx, d.GmailThreadID, d.CustomerEmail, d.DraftText)
+			subject := threadReplySubject(d.LeadID, s.pool)
+			sendErr = s.sendReplyInThread(ctx, d.GmailThreadID, d.CustomerEmail, subject, d.DraftText)
 		}
 
 		if sendErr != nil {
@@ -441,8 +454,8 @@ func buildTaskNotificationBody(assignedTo, taskType string, notes *string, dueDa
 	return b.String()
 }
 
-// isFormRelayThread checks if the original email was from a form relay sender.
-func isFormRelayThread(gmailThreadID, leadID string, pool *db.Pool) bool {
+// isFormRelayLead checks if the original email was from a form relay sender.
+func isFormRelayLead(leadID string, pool *db.Pool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -477,8 +490,27 @@ func isGoogleVoiceThread(leadID string, pool *db.Pool) (string, bool) {
 	return "", false
 }
 
-func (s *Service) sendReplyInThread(ctx context.Context, threadID, toEmail, body string) error {
-	raw := buildMIME(s.selfEmail, toEmail, "Re: Your inquiry", body, threadID)
+func threadReplySubject(leadID string, pool *db.Pool) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var subject string
+	err := pool.Pool.QueryRow(ctx,
+		`select coalesce(subject, '') from email_threads where lead_id = $1::uuid order by received_at limit 1`,
+		leadID,
+	).Scan(&subject)
+	if err != nil || strings.TrimSpace(subject) == "" {
+		return "Re: Your inquiry"
+	}
+	subject = strings.TrimSpace(subject)
+	if strings.HasPrefix(strings.ToLower(subject), "re:") {
+		return subject
+	}
+	return "Re: " + subject
+}
+
+func (s *Service) sendReplyInThread(ctx context.Context, threadID, toEmail, subject, body string) error {
+	raw := buildMIME(s.selfEmail, toEmail, subject, body)
 	msg := &gm.Message{
 		ThreadId: threadID,
 		Raw:      raw,
@@ -492,14 +524,14 @@ func (s *Service) sendNewEmail(ctx context.Context, toEmail, toName, body string
 	if toName != "" {
 		to = fmt.Sprintf("%s <%s>", toName, toEmail)
 	}
-	raw := buildMIME(s.selfEmail, to, "From Salsa Collective", body, "")
+	raw := buildMIME(s.selfEmail, to, "From Salsa Collective", body)
 	msg := &gm.Message{Raw: raw}
 	_, err := s.gmailSvc.Users.Messages.Send("me", msg).Context(ctx).Do()
 	return err
 }
 
 // buildMIME constructs a base64url-encoded RFC 2822 message for the Gmail API.
-func buildMIME(from, to, subject, body, inReplyToThreadID string) string {
+func buildMIME(from, to, subject, body string) string {
 	var b strings.Builder
 	b.WriteString("From: " + from + "\r\n")
 	b.WriteString("To: " + to + "\r\n")
@@ -511,7 +543,3 @@ func buildMIME(from, to, subject, body, inReplyToThreadID string) string {
 	return base64.URLEncoding.EncodeToString([]byte(b.String()))
 }
 
-// SenderFrom re-exports parseutil.SenderFrom for backward compat.
-func SenderFrom(fromHeader string) (name, email string) {
-	return parseutil.SenderFrom(fromHeader)
-}

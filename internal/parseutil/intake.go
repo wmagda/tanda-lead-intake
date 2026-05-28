@@ -170,6 +170,9 @@ func ExtractGoogleVoiceContact(subject, body string) (name, phone string) {
 	if IsGoogleVoiceDisplayName(name) {
 		name = ""
 	}
+	if IsStudioPhone(phone) {
+		phone = ""
+	}
 	return name, phone
 }
 
@@ -222,10 +225,37 @@ func ExtractContactFromFormBody(body string) (name, email string) {
 	return name, email
 }
 
-// ExtractPhoneFromBody returns the first US-style phone number found in text.
+// studioPhoneDigits is the normalized studio line [STUDIO-PHONE] — not a customer number.
+const studioPhoneDigits = "[STUDIO-PHONE]"
+
+// NormalizePhoneDigits strips a phone string to 10-digit US (or 11 with leading 1).
+func NormalizePhoneDigits(phone string) string {
+	var b strings.Builder
+	for _, r := range phone {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	d := b.String()
+	if len(d) == 11 && d[0] == '1' {
+		d = d[1:]
+	}
+	return d
+}
+
+// IsStudioPhone is true for the studio's published contact line (and normalized variants).
+func IsStudioPhone(phone string) bool {
+	d := NormalizePhoneDigits(phone)
+	return d == studioPhoneDigits
+}
+
+// ExtractPhoneFromBody returns the first US-style phone that is not the studio line.
 func ExtractPhoneFromBody(body string) string {
-	if m := rePhone.FindStringSubmatch(body); len(m) > 0 {
-		return strings.TrimSpace(m[0])
+	for _, m := range rePhone.FindAllString(body, -1) {
+		m = strings.TrimSpace(m)
+		if m != "" && !IsStudioPhone(m) {
+			return m
+		}
 	}
 	return ""
 }

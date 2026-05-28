@@ -25,6 +25,8 @@ type Message struct {
 	Subject        string
 	Body           string
 	ReceivedAt     time.Time // when Gmail received the message (InternalDate)
+	// StudioRepliedAfter is set when Gmail shows an outbound studio message later in the same thread.
+	StudioRepliedAfter bool
 }
 
 // Result is returned after a successful ingest.
@@ -79,6 +81,7 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	if parseErr != nil {
 		log.Printf("[ingest] skipped msg=%s: AI parse failed after %s: %v",
 			msg.GmailMessageID, time.Since(aiStart).Round(time.Millisecond), parseErr)
+		recordSkipped(ctx, pool, msg)
 		return Result{Status: "skipped", SkipReason: "ai parse failed"}, nil
 	}
 	if !pr.IsLeadIntent() {
@@ -89,6 +92,10 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 
 	aiLead = pr.ToLead()
 	draftText = pr.Draft
+	if msg.StudioRepliedAfter {
+		draftText = ""
+		log.Printf("[ingest] skip draft msg=%s: studio already replied in Gmail thread", msg.GmailMessageID)
+	}
 	intent := ""
 	conf := 0.0
 	if aiLead.RequestType != nil {
@@ -113,7 +120,11 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 		return Result{}, fmt.Errorf("tx begin: %w", err)
 	}
 
-	resp, err := ingestInTx(ctx, tx, msg, custName, custEmail, custPhone, aiLead, draftText)
+	leadStatus := "new"
+	if msg.StudioRepliedAfter {
+		leadStatus = "waiting_customer"
+	}
+	resp, err := ingestInTx(ctx, tx, msg, custName, custEmail, custPhone, aiLead, draftText, leadStatus)
 	if err != nil {
 		_ = tx.Rollback(ctx)
 		return Result{}, err
@@ -122,9 +133,11 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, fmt.Errorf("tx commit: %w", err)
 	}
-	resp.Status = "created"
-	log.Printf("[ingest] saved lead=%s email_thread=%s draft=%v msg=%s",
-		resp.LeadID, resp.ThreadID, resp.DraftID != nil, msg.GmailMessageID)
+	if resp.Status == "" {
+		resp.Status = "created"
+	}
+	log.Printf("[ingest] saved lead=%s email_thread=%s draft=%v msg=%s status=%s",
+		resp.LeadID, resp.ThreadID, resp.DraftID != nil, msg.GmailMessageID, resp.Status)
 	return resp, nil
 }
 
@@ -171,13 +184,19 @@ func resolveCustomer(msg Message, formRelay, voiceRelay bool, pr *ai.ParseResult
 				name = candidate
 			}
 		}
-		if pr.CustomerPhone != nil && strings.TrimSpace(*pr.CustomerPhone) != "" {
-			phone = strings.TrimSpace(*pr.CustomerPhone)
+		if pr.CustomerPhone != nil {
+			candidate := strings.TrimSpace(*pr.CustomerPhone)
+			if candidate != "" && !parseutil.IsStudioPhone(candidate) {
+				phone = candidate
+			}
 		}
 	}
 
 	if phone == "" {
 		phone = parseutil.ExtractPhoneFromBody(msg.Subject + "\n" + msg.Body)
+	}
+	if parseutil.IsStudioPhone(phone) {
+		phone = ""
 	}
 
 	if !notificationRelay && email == "" {
@@ -219,10 +238,15 @@ func logTruncate(s string, max int) string {
 }
 
 func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
-	displayName, senderEmail, customerPhone string, ai *models.Lead, draftText string) (Result, error) {
+	displayName, senderEmail, customerPhone string, ai *models.Lead, draftText, leadStatus string) (Result, error) {
+
+	if strings.TrimSpace(leadStatus) == "" {
+		leadStatus = "new"
+	}
 
 	var leadID, threadUUID string
 	var draftUUID *string
+	var resultStatus string
 
 	note := fmt.Sprintf("ingested from gmail: %s", time.Now().Format(time.RFC3339))
 
@@ -231,45 +255,95 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 		receivedAt = msg.ReceivedAt
 	}
 
-	row := tx.QueryRow(ctx, `
-		insert into leads (
-			gmail_thread_id, customer_email, customer_name, customer_phone,
-			request_type, dance_style, level,
-			student_count, requested_time, status, priority, ai_confidence, received_at, notes
-		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		on conflict (gmail_thread_id) do update
-		set
-			customer_email = coalesce(excluded.customer_email, leads.customer_email),
-			customer_name  = coalesce(excluded.customer_name, leads.customer_name),
-			customer_phone = coalesce(excluded.customer_phone, leads.customer_phone),
-			request_type   = excluded.request_type,
-			dance_style    = excluded.dance_style,
-			level          = excluded.level,
-			student_count  = excluded.student_count,
-			requested_time = excluded.requested_time,
-			ai_confidence  = excluded.ai_confidence,
-			received_at    = coalesce(leads.received_at, excluded.received_at),
-			notes          = leads.notes || chr(10) || $14,
-			updated_at     = now()
-		returning id
-	`,
-		msg.GmailThreadID,
-		senderEmail,
-		sOrNil(displayName),
-		sOrNil(customerPhone),
-		ptrStrOrNil(ai.RequestType),
-		ptrStrOrNil(ai.DanceStyle),
-		ptrStrOrNil(ai.Level),
-		i32OrNil(ai.StudentCount),
-		ptrStrOrNil(ai.RequestedTime),
-		"new",
-		"normal",
-		fPtrOrNil(ai.AIConfidence),
-		receivedAt,
-		note,
-	)
-	if err := row.Scan(&leadID); err != nil {
-		return Result{}, fmt.Errorf("lead upsert: %w", err)
+	// Same customer often appears under a new Gmail thread after we send a standalone reply
+	// (e.g. form relay → sendNewEmail "From Salsa Collective" → customer replies on that thread).
+	if canonicalID, ok := lookupCanonicalLeadByEmail(ctx, tx, senderEmail); ok {
+		if err := mergeDuplicateLeadsByEmail(ctx, tx, canonicalID, senderEmail); err != nil {
+			return Result{}, err
+		}
+		err := tx.QueryRow(ctx, `
+			update leads set
+				gmail_thread_id = $1,
+				customer_email = $2,
+				customer_name  = coalesce($3, customer_name),
+				customer_phone = coalesce($4, customer_phone),
+				request_type   = $5,
+				dance_style    = $6,
+				level          = $7,
+				student_count  = $8,
+				requested_time = $9,
+				ai_confidence  = $10,
+				received_at    = coalesce(received_at, $11),
+				status         = case when $12 = 'waiting_customer' then 'waiting_customer' else leads.status end,
+				notes          = leads.notes || chr(10) || $13,
+				updated_at     = now()
+			where id = $14::uuid
+			returning id::text
+		`,
+			msg.GmailThreadID,
+			senderEmail,
+			sOrNil(displayName),
+			sOrNil(customerPhone),
+			ptrStrOrNil(ai.RequestType),
+			ptrStrOrNil(ai.DanceStyle),
+			ptrStrOrNil(ai.Level),
+			i32OrNil(ai.StudentCount),
+			ptrStrOrNil(ai.RequestedTime),
+			fPtrOrNil(ai.AIConfidence),
+			receivedAt,
+			leadStatus,
+			note,
+			canonicalID,
+		).Scan(&leadID)
+		if err != nil {
+			return Result{}, fmt.Errorf("lead update (same customer): %w", err)
+		}
+		resultStatus = "updated"
+		log.Printf("[ingest] attached msg=%s to existing lead=%s (customer %s, gmail thread %s)",
+			msg.GmailMessageID, leadID, senderEmail, msg.GmailThreadID)
+	} else {
+		row := tx.QueryRow(ctx, `
+			insert into leads (
+				gmail_thread_id, customer_email, customer_name, customer_phone,
+				request_type, dance_style, level,
+				student_count, requested_time, status, priority, ai_confidence, received_at, notes
+			) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			on conflict (gmail_thread_id) do update
+			set
+				customer_email = coalesce(excluded.customer_email, leads.customer_email),
+				customer_name  = coalesce(excluded.customer_name, leads.customer_name),
+				customer_phone = coalesce(excluded.customer_phone, leads.customer_phone),
+				request_type   = excluded.request_type,
+				dance_style    = excluded.dance_style,
+				level          = excluded.level,
+				student_count  = excluded.student_count,
+				requested_time = excluded.requested_time,
+				ai_confidence  = excluded.ai_confidence,
+				received_at    = coalesce(leads.received_at, excluded.received_at),
+				status         = case when excluded.status = 'waiting_customer' then 'waiting_customer' else leads.status end,
+				notes          = leads.notes || chr(10) || $14,
+				updated_at     = now()
+			returning id
+		`,
+			msg.GmailThreadID,
+			senderEmail,
+			sOrNil(displayName),
+			sOrNil(customerPhone),
+			ptrStrOrNil(ai.RequestType),
+			ptrStrOrNil(ai.DanceStyle),
+			ptrStrOrNil(ai.Level),
+			i32OrNil(ai.StudentCount),
+			ptrStrOrNil(ai.RequestedTime),
+			leadStatus,
+			"normal",
+			fPtrOrNil(ai.AIConfidence),
+			receivedAt,
+			note,
+		)
+		if err := row.Scan(&leadID); err != nil {
+			return Result{}, fmt.Errorf("lead upsert: %w", err)
+		}
+		resultStatus = "created"
 	}
 
 	threadUUID = mustUUID()
@@ -295,6 +369,7 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 	}
 
 	resp := Result{
+		Status:   resultStatus,
 		LeadID:   leadID,
 		ThreadID: threadUUID,
 		DraftID:  draftUUID,
@@ -330,6 +405,67 @@ func KnownMessageIDs(ctx context.Context, pool *pgxpool.Pool, ids []string) (map
 		known[id] = true
 	}
 	return known, rows.Err()
+}
+
+// lookupCanonicalLeadByEmail picks one lead per customer inbox (most messages, then oldest).
+func lookupCanonicalLeadByEmail(ctx context.Context, tx pgx.Tx, customerEmail string) (string, bool) {
+	email := strings.ToLower(strings.TrimSpace(customerEmail))
+	if email == "" {
+		return "", false
+	}
+	var id string
+	err := tx.QueryRow(ctx, `
+		select l.id::text
+		from leads l
+		where lower(trim(l.customer_email)) = $1
+		order by (select count(*)::int from email_threads et where et.lead_id = l.id) desc,
+		         l.created_at asc
+		limit 1
+	`, email).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) || id == "" {
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	return id, true
+}
+
+// mergeDuplicateLeadsByEmail moves threads/drafts off duplicate lead rows and deletes them.
+func mergeDuplicateLeadsByEmail(ctx context.Context, tx pgx.Tx, canonicalID, customerEmail string) error {
+	email := strings.ToLower(strings.TrimSpace(customerEmail))
+	if email == "" {
+		return nil
+	}
+
+	var merged int
+	if err := tx.QueryRow(ctx, `
+		with dupes as (
+			select id from leads
+			where lower(trim(customer_email)) = $1 and id <> $2::uuid
+		),
+		moved_threads as (
+			update email_threads set lead_id = $2::uuid
+			where lead_id in (select id from dupes)
+			returning 1
+		),
+		moved_drafts as (
+			update draft_responses set lead_id = $2::uuid
+			where lead_id in (select id from dupes)
+			returning 1
+		),
+		deleted as (
+			delete from leads where id in (select id from dupes)
+			returning 1
+		)
+		select (select count(*) from moved_threads) + (select count(*) from deleted)
+	`, email, canonicalID).Scan(&merged); err != nil {
+		return fmt.Errorf("merge duplicate leads: %w", err)
+	}
+	if merged > 0 {
+		log.Printf("[ingest] merged duplicate lead(s) for %s into lead=%s", customerEmail, canonicalID)
+	}
+	return nil
 }
 
 func lookupByGmailMsgID(ctx context.Context, pool *pgxpool.Pool, msgID string) (threadID, leadID string, err error) {

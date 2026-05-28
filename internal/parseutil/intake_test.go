@@ -62,6 +62,28 @@ func TestExtractPhoneFromBody(t *testing.T) {
 	}
 }
 
+func TestIsStudioPhone(t *testing.T) {
+	for _, p := range []string{"[STUDIO-PHONE]", "[STUDIO-PHONE]", "[STUDIO-PHONE]"} {
+		if !IsStudioPhone(p) {
+			t.Fatalf("expected studio phone %q", p)
+		}
+	}
+	if IsStudioPhone("(269) 290-9011") {
+		t.Fatal("customer phone should not match studio")
+	}
+}
+
+func TestExtractPhoneFromBody_skipsStudio(t *testing.T) {
+	body := "Thanks!\n\nSalsa Collective\n[STUDIO-PHONE]\n\nOn Mon, Jane wrote:\nMy number is (269) 290-9011"
+	got := ExtractPhoneFromBody(body)
+	if got == "" || IsStudioPhone(got) {
+		t.Fatalf("expected customer phone, got %q", got)
+	}
+	if NormalizePhoneDigits(got) != "2692909011" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestIsGoogleVoiceRelay(t *testing.T) {
 	if !IsGoogleVoiceRelay("Google Voice <[VOICE-NOREPLY]>", "New text message from (269) 290-9011", "") {
 		t.Fatal("expected voice relay")

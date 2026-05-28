@@ -220,6 +220,7 @@ func (r *ParseResult) UnmarshalJSON(data []byte) error {
 var validIntents = map[string]bool{
 	"private_lesson":   true,
 	"group_class":      true,
+	"event_booking":    true,
 	"pricing":          true,
 	"teacher_request":  true,
 	"general_question": true,
