@@ -23,9 +23,10 @@ type Service struct {
 	pool      *db.Pool
 	aiClient  *ai.Client
 	gmailSvc  *gm.Service
-	selfEmail string
-	interval  time.Duration
-	stopCh    chan struct{}
+	selfEmail     string
+	pollInterval  time.Duration
+	sendInterval  time.Duration
+	stopCh        chan struct{}
 	lastPoll  time.Time
 	pollMu    sync.Mutex
 }
@@ -46,14 +47,18 @@ func NewPollingService(pool *db.Pool, aiClient *ai.Client) *Service {
 		log.Println("[gmail] GMAIL_CREDENTIALS/GMAIL_TOKEN not set — polling disabled")
 	}
 
+	pollInterval := parseutil.EnvDuration("GMAIL_POLL_INTERVAL", 2*time.Minute)
+	sendInterval := parseutil.EnvDuration("SEND_POLL_INTERVAL", 30*time.Second)
+
 	return &Service{
-		pool:      pool,
-		aiClient:  aiClient,
-		gmailSvc:  gmailSvc,
-		selfEmail: selfEmail,
-		interval:  2 * time.Minute,
-		stopCh:    make(chan struct{}),
-		lastPoll:  time.Now().Add(-parseutil.InitialLookback()),
+		pool:         pool,
+		aiClient:     aiClient,
+		gmailSvc:     gmailSvc,
+		selfEmail:    selfEmail,
+		pollInterval: pollInterval,
+		sendInterval: sendInterval,
+		stopCh:       make(chan struct{}),
+		lastPoll:     time.Now().Add(-parseutil.InitialLookback()),
 	}
 }
 
@@ -70,9 +75,9 @@ func (s *Service) loop() {
 	// Poll immediately on start, then on interval
 	s.poll()
 
-	ticker := time.NewTicker(s.interval)
+	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
-	log.Printf("[gmail] polling every %s for %s", s.interval, s.selfEmail)
+	log.Printf("[gmail] polling every %s for %s", s.pollInterval, s.selfEmail)
 
 	for {
 		select {
@@ -221,9 +226,9 @@ func (s *Service) StartDraftSender() {
 }
 
 func (s *Service) sendLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(s.sendInterval)
 	defer ticker.Stop()
-	log.Println("[send] sender started (drafts + task notifications, polling every 30s)")
+	log.Printf("[send] sender started (drafts + task notifications, polling every %s)", s.sendInterval)
 
 	for {
 		select {

@@ -43,6 +43,18 @@ func TestInitialLookback(t *testing.T) {
 	}
 }
 
+func TestEnvDuration(t *testing.T) {
+	const key = "TEST_POLL_INTERVAL"
+	os.Setenv(key, "45s")
+	defer os.Unsetenv(key)
+	if got := EnvDuration(key, time.Minute); got != 45*time.Second {
+		t.Fatalf("got %v", got)
+	}
+	if got := EnvDuration("TEST_UNSET_INTERVAL", time.Minute); got != time.Minute {
+		t.Fatalf("default: got %v", got)
+	}
+}
+
 func TestExtractPhoneFromBody(t *testing.T) {
 	body := "New Google Voice message from (970) 555-1234"
 	if got := ExtractPhoneFromBody(body); got == "" {

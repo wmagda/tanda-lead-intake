@@ -54,6 +54,20 @@ func InitialLookback() time.Duration {
 	return defaultLookback
 }
 
+// EnvDuration reads key as a Go duration (e.g. 2m, 30s, 1h). Returns defaultVal if unset or invalid.
+func EnvDuration(key string, defaultVal time.Duration) time.Duration {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return defaultVal
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		log.Printf("[config] invalid %s=%q, using default %s", key, s, defaultVal)
+		return defaultVal
+	}
+	return d
+}
+
 func matchesAddrList(addr string, list []string) bool {
 	addr = strings.ToLower(strings.TrimSpace(addr))
 	for _, a := range list {
