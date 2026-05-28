@@ -288,7 +288,24 @@ func (s *Service) pollApprovedDrafts() {
 
 	for _, d := range drafts {
 		if strings.TrimSpace(d.CustomerEmail) == "" {
-			log.Printf("[send] skip draft=%s lead=%s: no customer_email", d.DraftID, d.LeadID)
+			// For Google Voice notifications, reply in-thread — Google Voice
+			// forwards the reply as SMS to the original caller.
+			if voiceSender, ok := isGoogleVoiceThread(d.LeadID, s.pool); ok {
+				sendErr := s.sendReplyInThread(ctx, d.GmailThreadID, voiceSender, d.DraftText)
+				if sendErr != nil {
+					log.Printf("[send] FAILED voice-sms draft=%s lead=%s to=%s: %v", d.DraftID, d.LeadID, voiceSender, sendErr)
+				} else {
+					_, err := s.pool.Pool.Exec(ctx,
+						`update draft_responses set sent_at = now() where id = $1`, d.DraftID)
+					if err != nil {
+						log.Printf("[send] sent voice-sms but failed to mark sent_at draft=%s: %v", d.DraftID, err)
+					} else {
+						log.Printf("[send] sent voice-sms draft=%s lead=%s to=%s (sent as SMS via Google Voice)", d.DraftID, d.LeadID, voiceSender)
+					}
+				}
+			} else {
+				log.Printf("[send] skip draft=%s lead=%s: no customer_email", d.DraftID, d.LeadID)
+			}
 			continue
 		}
 
@@ -433,6 +450,26 @@ func isFormRelayThread(gmailThreadID, leadID string, pool *db.Pool) bool {
 		return false
 	}
 	return parseutil.IsFormRelay(senderEmail)
+}
+
+// isGoogleVoiceThread checks if the original email was a Google Voice notification.
+// Returns the original sender email (e.g. [VOICE-NOREPLY]) and true, or \"\" and false.
+func isGoogleVoiceThread(leadID string, pool *db.Pool) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var senderEmail string
+	err := pool.Pool.QueryRow(ctx,
+		`select sender_email from email_threads where lead_id = $1::uuid order by received_at limit 1`,
+		leadID,
+	).Scan(&senderEmail)
+	if err != nil {
+		return "", false
+	}
+	if parseutil.IsGoogleVoiceRelay(senderEmail, "", "") {
+		return senderEmail, true
+	}
+	return "", false
 }
 
 func (s *Service) sendReplyInThread(ctx context.Context, threadID, toEmail, body string) error {
