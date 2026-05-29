@@ -327,10 +327,14 @@ func (s *Service) pollApprovedDrafts() {
 		}
 
 		var sendErr error
-		if isFormRelayLead(d.LeadID, s.pool) {
+		if shouldSendNewEmail(ctx, s.pool, d.LeadID) {
+			log.Printf("[send] draft=%s lead=%s: new email to %s (first outbound, form relay)",
+				d.DraftID, d.LeadID, d.CustomerEmail)
 			sendErr = s.sendNewEmail(ctx, d.CustomerEmail, d.CustomerName, d.DraftText)
 		} else {
 			subject := threadReplySubject(d.LeadID, s.pool)
+			log.Printf("[send] draft=%s lead=%s: reply in thread %s subject=%q",
+				d.DraftID, d.LeadID, d.GmailThreadID, subject)
 			sendErr = s.sendReplyInThread(ctx, d.GmailThreadID, d.CustomerEmail, subject, d.DraftText)
 		}
 
@@ -454,14 +458,28 @@ func buildTaskNotificationBody(assignedTo, taskType string, notes *string, dueDa
 	return b.String()
 }
 
-// isFormRelayLead checks if the original email was from a form relay sender.
-func isFormRelayLead(leadID string, pool *db.Pool) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+// shouldSendNewEmail is true only for the first outbound when the inquiry arrived via a form relay
+// (Resend, etc.). Later replies use sendReplyInThread on leads.gmail_thread_id (the active conversation).
+func shouldSendNewEmail(ctx context.Context, pool *db.Pool, leadID string) bool {
+	if leadHasSentDraft(ctx, pool, leadID) {
+		return false
+	}
+	return firstInboundWasFormRelay(ctx, pool, leadID)
+}
 
+func leadHasSentDraft(ctx context.Context, pool *db.Pool, leadID string) bool {
+	var n int
+	err := pool.Pool.QueryRow(ctx,
+		`select count(*) from draft_responses where lead_id = $1::uuid and sent_at is not null`,
+		leadID,
+	).Scan(&n)
+	return err == nil && n > 0
+}
+
+func firstInboundWasFormRelay(ctx context.Context, pool *db.Pool, leadID string) bool {
 	var senderEmail string
 	err := pool.Pool.QueryRow(ctx,
-		`select sender_email from email_threads where lead_id = $1::uuid order by received_at limit 1`,
+		`select sender_email from email_threads where lead_id = $1::uuid order by received_at asc limit 1`,
 		leadID,
 	).Scan(&senderEmail)
 	if err != nil {
@@ -496,7 +514,7 @@ func threadReplySubject(leadID string, pool *db.Pool) string {
 
 	var subject string
 	err := pool.Pool.QueryRow(ctx,
-		`select coalesce(subject, '') from email_threads where lead_id = $1::uuid order by received_at limit 1`,
+		`select coalesce(subject, '') from email_threads where lead_id = $1::uuid order by received_at desc limit 1`,
 		leadID,
 	).Scan(&subject)
 	if err != nil || strings.TrimSpace(subject) == "" {
