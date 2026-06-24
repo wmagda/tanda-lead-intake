@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SystemPrompt is injected into every LLM call.
 // Derived from salsa-collective.com public pages (home, classes, contact, calendar, performances).
@@ -90,6 +93,10 @@ Do not maintain a mental blocklist of brand names — reason about whether a hum
 - **teacher_request** — asks about performance team, audition, advanced instruction, choreography
 - **general_question** — business hours, location, "how do I reach you", "do I need a partner", what to wear (not a request to dump phone/email in the draft — they are usually already in contact)
 
+### Follow-up messages
+
+When **conversation history** appears in the user message, you are replying to the **latest** inbound email only. Use prior messages for context — do not write as if this is the first contact. Avoid repeating a full welcome or pricing block already covered unless they ask again or something changed.
+
 ### Draft style guide
 
 - Warm, enthusiastic, welcoming
@@ -124,8 +131,16 @@ The customer is already reaching out — your draft is the reply. Do not treat t
 
 Return ONLY the JSON object. No markdown, no explanation, no trailing newline after the object.`
 
-// UserPrompt builds the per-email prompt.
-func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool) string {
+// ConversationMessage is one prior turn in the thread (from DB), not the message being parsed.
+type ConversationMessage struct {
+	Role    string // "customer" or "studio"
+	From    string
+	Subject string
+	Body    string
+}
+
+// UserPrompt builds the per-email prompt. prior is optional thread history (oldest first).
+func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage) string {
 	note := ""
 	switch {
 	case voiceRelay:
@@ -136,11 +151,52 @@ func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool) string
 	case formRelay:
 		note = "The envelope sender is the studio website contact-form relay (e.g. Resend) — extract the visitor's email and name from the body, not from the From header.\n\n"
 	}
-	return fmt.Sprintf(`%sIncoming email (envelope From) %q with subject %q:
+
+	history := formatConversationHistory(prior)
+
+	return fmt.Sprintf(`%s%sIncoming email (envelope From) %q with subject %q:
 
 ---
 %s
 ---
 
-Return the JSON object now.`, note, sender, subject, body)
+Return the JSON object now.`, note, history, sender, subject, body)
+}
+
+func formatConversationHistory(prior []ConversationMessage) string {
+	if len(prior) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Conversation history (oldest first)\n\n")
+	b.WriteString("The following messages already happened. Your draft must respond to the **new incoming email below**, not restart the conversation.\n\n")
+	for i, m := range prior {
+		role := strings.TrimSpace(m.Role)
+		if role == "" {
+			role = "customer"
+		}
+		label := "Customer"
+		if role == "studio" {
+			label = "Studio (sent reply)"
+		}
+		b.WriteString(fmt.Sprintf("### [%d] %s", i+1, label))
+		if m.From != "" {
+			b.WriteString(fmt.Sprintf(" — from %q", m.From))
+		}
+		if m.Subject != "" {
+			b.WriteString(fmt.Sprintf(", subject %q", m.Subject))
+		}
+		b.WriteString("\n\n---\n")
+		b.WriteString(truncateBody(m.Body, 2000))
+		b.WriteString("\n---\n\n")
+	}
+	return b.String()
+}
+
+func truncateBody(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n…[TRUNCATED]"
 }

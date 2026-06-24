@@ -71,9 +71,10 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 		msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, formRelay, voiceRelay, logTruncate(msg.Subject, 80), len(msg.Body))
 
 	parseCtx, parseCancel := context.WithTimeout(ctx, ai.RequestTimeout())
-	log.Printf("[ingest] AI parse start msg=%s (timeout %s)", msg.GmailMessageID, ai.RequestTimeout())
+	prior := loadConversationContext(ctx, pool, msg, formRelay)
+	log.Printf("[ingest] AI parse start msg=%s (timeout %s, prior_msgs=%d)", msg.GmailMessageID, ai.RequestTimeout(), len(prior))
 	aiStart := time.Now()
-	pr, parseErr := aiClient.ParseExtracted(parseCtx, msg.From, msg.Subject, msg.Body, formRelay, voiceRelay)
+	pr, parseErr := aiClient.ParseExtracted(parseCtx, msg.From, msg.Subject, msg.Body, formRelay, voiceRelay, prior)
 	parseCancel()
 
 	var aiLead *models.Lead
@@ -349,9 +350,9 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 	threadUUID = mustUUID()
 	_, envelopeEmail := parseutil.SenderFrom(msg.From)
 	_, err := tx.Exec(ctx, `
-		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body)
-		values ($1, $2, $3, $4, $5, $6, $7)
-	`, threadUUID, leadID, msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body))
+		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, received_at)
+		values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()))
+	`, threadUUID, leadID, msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body), receivedAt)
 	if err != nil {
 		return Result{}, fmt.Errorf("thread insert: %w", err)
 	}

@@ -198,7 +198,7 @@ func TestParseResult_IsLeadIntent(t *testing.T) {
 }
 
 func TestUserPrompt_ContainsSenderAndSubject(t *testing.T) {
-	p := ai.UserPrompt("alice@example.com", "Hello", "body text", false, false)
+	p := ai.UserPrompt("alice@example.com", "Hello", "body text", false, false, nil)
 	if !strings.Contains(p, "alice@example.com") {
 		t.Error("UserPrompt should contain sender email")
 	}
@@ -207,5 +207,25 @@ func TestUserPrompt_ContainsSenderAndSubject(t *testing.T) {
 	}
 	if !strings.Contains(p, "body text") {
 		t.Error("UserPrompt should contain body")
+	}
+}
+
+func TestUserPrompt_IncludesConversationHistory(t *testing.T) {
+	prior := []ai.ConversationMessage{
+		{Role: "customer", From: "bob@example.com", Subject: "Lessons?", Body: "We want salsa lessons"},
+		{Role: "studio", Body: "Thanks for reaching out! Private lessons are [SOLO-RATE]."},
+	}
+	p := ai.UserPrompt("bob@example.com", "Re: Lessons?", "Tuesday works", false, false, prior)
+	if !strings.Contains(p, "Conversation history") {
+		t.Fatal("expected conversation history section")
+	}
+	if !strings.Contains(p, "We want salsa lessons") {
+		t.Fatal("expected prior customer message")
+	}
+	if !strings.Contains(p, "Private lessons are [SOLO-RATE]") {
+		t.Fatal("expected prior studio reply")
+	}
+	if !strings.Contains(p, "Tuesday works") {
+		t.Fatal("expected current message")
 	}
 }
