@@ -194,6 +194,8 @@ tanda-lead-intake/
 | `GMAIL_INITIAL_LOOKBACK` | no | First poll window on startup (default `24h`, try `7d` for backfill) |
 | `GMAIL_POLL_INTERVAL` | no | Inbox poll interval (default `2m`) |
 | `SEND_POLL_INTERVAL` | no | Approved drafts + task notify poll (default `30s`) |
+| `LOG_LEVEL` | no | Logging verbosity (default `info`) |
+| `ENV` | no | Deployment environment label (default `local`) |
 
 ---
 

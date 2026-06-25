@@ -12,6 +12,9 @@ test:
 run: ## Gmail + ingest worker (no HTTP)
 	go run ./cmd/worker
 
+deploy: ## local cron job
+	go build -o worker ./cmd/worker/ && systemctl --user restart tanda-worker.service
+
 ingest-test: ## one-shot ingest for local testing
 	go run ./cmd/process-email \
 	  -thread thread-test-001 -message msg-test-$$(date +%s) \

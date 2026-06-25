@@ -94,6 +94,7 @@ var (
 )
 
 // Default Google Voice notification senders (envelope is not the caller).
+// Also includes txt.voice.google.com domain used for SMS replies.
 var googleVoiceSenders = []string{
 	"[VOICE-NOREPLY]",
 	"sms-noreply@google.com",
@@ -106,6 +107,9 @@ func IsGoogleVoiceRelay(envelopeFrom, subject, body string) bool {
 		if email == s {
 			return true
 		}
+	}
+	if strings.HasSuffix(email, "@txt.voice.google.com") {
+		return true
 	}
 	combined := strings.ToLower(subject + "\n" + body)
 	if len(combined) > 2000 {
@@ -126,6 +130,9 @@ func IsNotificationSenderEmail(email string) bool {
 		if email == s {
 			return true
 		}
+	}
+	if strings.HasSuffix(email, "@txt.voice.google.com") {
+		return true
 	}
 	if matchesAddrList(email, FormRelayFrom()) {
 		return true

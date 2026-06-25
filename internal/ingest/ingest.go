@@ -366,6 +366,18 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 		if err != nil {
 			return Result{}, fmt.Errorf("draft insert: %w", err)
 		}
+		// Reject any older pending drafts for the same lead —
+		// only the most recent draft should stay pending.
+		if _, err := tx.Exec(ctx, `
+			update draft_responses
+			set approval_status = 'rejected'
+			where lead_id = $1::uuid
+			  and id <> $2::uuid
+			  and approval_status = 'pending'
+			  and sent_at is null
+		`, leadID, dID); err != nil {
+			log.Printf("[ingest] warning: failed to reject older draft(s) for lead=%s: %v", leadID, err)
+		}
 		draftUUID = &dID
 	}
 
