@@ -48,3 +48,5 @@ oauth*.json
 # Temporary
 tmp/
 log/
+/worker
+/logs/

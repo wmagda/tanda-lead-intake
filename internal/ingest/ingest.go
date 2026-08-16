@@ -27,6 +27,10 @@ type Message struct {
 	ReceivedAt     time.Time // when Gmail received the message (InternalDate)
 	// StudioRepliedAfter is set when Gmail shows an outbound studio message later in the same thread.
 	StudioRepliedAfter bool
+	// Retry is set when re-running a message that previously failed AI parsing
+	// (bypasses the dedup check so a transient LM Studio outage doesn't eat the lead).
+	Retry      bool
+	RetryCount int
 }
 
 // Result is returned after a successful ingest.
@@ -54,7 +58,7 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	if err != nil {
 		return Result{}, fmt.Errorf("lookup: %w", err)
 	}
-	if existingThreadID != "" {
+	if existingThreadID != "" && !msg.Retry {
 		log.Printf("[ingest] duplicate msg=%s lead=%s thread=%s",
 			msg.GmailMessageID, existingLeadID, existingThreadID)
 		return Result{
@@ -82,12 +86,12 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	if parseErr != nil {
 		log.Printf("[ingest] skipped msg=%s: AI parse failed after %s: %v",
 			msg.GmailMessageID, time.Since(aiStart).Round(time.Millisecond), parseErr)
-		recordSkipped(ctx, pool, msg)
+		recordSkipped(ctx, pool, msg, "ai_failed")
 		return Result{Status: "skipped", SkipReason: "ai parse failed"}, nil
 	}
 	if !pr.IsLeadIntent() {
 		log.Printf("[ingest] skipped msg=%s: not a potential client (is_lead=false)", msg.GmailMessageID)
-		recordSkipped(ctx, pool, msg)
+		recordSkipped(ctx, pool, msg, "skipped")
 		return Result{Status: "skipped", SkipReason: "not a lead"}, nil
 	}
 
@@ -111,7 +115,7 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 	custName, custEmail, custPhone := resolveCustomer(msg, formRelay, voiceRelay, &pr, displayName, envelopeEmail)
 	if custEmail == "" && custPhone == "" {
 		log.Printf("[ingest] skipped msg=%s: no customer contact", msg.GmailMessageID)
-		recordSkipped(ctx, pool, msg)
+		recordSkipped(ctx, pool, msg, "skipped")
 		return Result{Status: "skipped", SkipReason: "no customer contact"}, nil
 	}
 	log.Printf("[ingest] customer %q <%s> phone=%q", custName, custEmail, custPhone)
@@ -216,18 +220,96 @@ func resolveCustomer(msg Message, formRelay, voiceRelay bool, pr *ai.ParseResult
 	return name, email, phone
 }
 
-// recordSkipped inserts into email_threads with lead_id=NULL so the message
-// is recognized as already-processed on future runs (avoids re-running the LLM).
-func recordSkipped(ctx context.Context, pool *pgxpool.Pool, msg Message) {
+// recordSkipped marks a message as not-a-lead so it won't be re-parsed on future
+// Gmail polls. status distinguishes a deliberate skip ("skipped") from a transient
+// AI outage ("ai_failed"). ai_failed rows get an exponential backoff and are
+// re-processed by RetryFailedMessages; skipped rows are permanent.
+func recordSkipped(ctx context.Context, pool *pgxpool.Pool, msg Message, status string) {
 	_, envelopeEmail := parseutil.SenderFrom(msg.From)
+	// Backoff for ai_failed: 2^retry_count minutes, capped at 6h. Only meaningful on the
+	// conflict path (existing ai_failed row) since a fresh row starts at retry_count=0.
+	if status == "ai_failed" {
+		_, err := pool.Exec(ctx, `
+			insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, status, retry_count, next_retry_at)
+			values ($1, null, $2, $3, $4, $5, $6, 'ai_failed', 1, now() + interval '1 minute')
+			on conflict (gmail_message_id) do update
+				set status = 'ai_failed',
+				    retry_count = email_threads.retry_count + 1,
+				    next_retry_at = least(
+				        now() + (interval '1 minute') * pow(2, email_threads.retry_count),
+				        now() + interval '6 hours'
+				    )
+		`, mustUUID(), msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body))
+		if err != nil {
+			log.Printf("[ingest] warning: failed to record ai_failed msg=%s: %v", msg.GmailMessageID, err)
+		}
+		return
+	}
+
 	_, err := pool.Exec(ctx, `
-		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body)
-		values ($1, null, $2, $3, $4, $5, $6)
-		on conflict (gmail_message_id) do nothing
+		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, status)
+		values ($1, null, $2, $3, $4, $5, $6, 'skipped')
+		on conflict (gmail_message_id) do update
+			set status = 'skipped',
+			    next_retry_at = null
 	`, mustUUID(), msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body))
 	if err != nil {
 		log.Printf("[ingest] warning: failed to record skipped msg=%s: %v", msg.GmailMessageID, err)
 	}
+}
+
+// RetryFailedMessages re-processes email_threads rows whose status='ai_failed' and whose
+// backoff window has elapsed. It reconstructs the original Message and calls Process,
+// which bypasses the dedup check via Message.Retry. Returns the number re-processed.
+func RetryFailedMessages(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, max int) (int, error) {
+	rows, err := pool.Query(ctx, `
+		select gmail_message_id, gmail_thread_id, sender_email, subject, body
+		from email_threads
+		where status = 'ai_failed'
+		  and (next_retry_at is null or next_retry_at <= now())
+		order by next_retry_at asc
+		limit $1
+	`, max)
+	if err != nil {
+		return 0, fmt.Errorf("query ai_failed: %w", err)
+	}
+	defer rows.Close()
+
+	type pending struct {
+		msgID, threadID, sender, subject, body string
+	}
+	var pend []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.msgID, &p.threadID, &p.sender, &p.subject, &p.body); err != nil {
+			return 0, fmt.Errorf("scan ai_failed: %w", err)
+		}
+		pend = append(pend, p)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	retried := 0
+	for _, p := range pend {
+		msg := Message{
+			GmailThreadID:  p.threadID,
+			GmailMessageID: p.msgID,
+			From:           p.sender,
+			Subject:        p.subject,
+			Body:           p.body,
+			ReceivedAt:     time.Now(),
+			Retry:          true,
+		}
+		res, err := Process(ctx, pool, aiClient, msg)
+		if err != nil {
+			log.Printf("[retry] msg=%s re-ingest error: %v", p.msgID, err)
+			continue
+		}
+		log.Printf("[retry] msg=%s status=%s lead=%s reason=%q", p.msgID, res.Status, res.LeadID, res.SkipReason)
+		retried++
+	}
+	return retried, nil
 }
 
 func logTruncate(s string, max int) string {
@@ -350,8 +432,16 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 	threadUUID = mustUUID()
 	_, envelopeEmail := parseutil.SenderFrom(msg.From)
 	_, err := tx.Exec(ctx, `
-		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, received_at)
-		values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()))
+		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, received_at, status)
+		values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()), null)
+		on conflict (gmail_message_id) do update
+			set lead_id = $2::uuid,
+			    gmail_thread_id = excluded.gmail_thread_id,
+			    sender_email = excluded.sender_email,
+			    subject = excluded.subject,
+			    body = excluded.body,
+			    received_at = coalesce($8, received_at),
+			    status = null
 	`, threadUUID, leadID, msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body), receivedAt)
 	if err != nil {
 		return Result{}, fmt.Errorf("thread insert: %w", err)
@@ -483,7 +573,7 @@ func mergeDuplicateLeadsByEmail(ctx context.Context, tx pgx.Tx, canonicalID, cus
 
 func lookupByGmailMsgID(ctx context.Context, pool *pgxpool.Pool, msgID string) (threadID, leadID string, err error) {
 	err = pool.QueryRow(ctx,
-		`select gmail_thread_id, lead_id::text from email_threads where gmail_message_id=$1 limit 1`,
+		`select gmail_thread_id, coalesce(lead_id::text, '') from email_threads where gmail_message_id=$1 limit 1`,
 		msgID,
 	).Scan(&threadID, &leadID)
 	if errors.Is(err, pgx.ErrNoRows) {

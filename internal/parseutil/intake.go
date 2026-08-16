@@ -68,6 +68,20 @@ func EnvDuration(key string, defaultVal time.Duration) time.Duration {
 	return d
 }
 
+// EnvInt reads key as a positive int. Returns defaultVal if unset or invalid.
+func EnvInt(key string, defaultVal int) int {
+	s := strings.TrimSpace(os.Getenv(key))
+	if s == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		log.Printf("[config] invalid %s=%q, using default %d", key, s, defaultVal)
+		return defaultVal
+	}
+	return n
+}
+
 func matchesAddrList(addr string, list []string) bool {
 	addr = strings.ToLower(strings.TrimSpace(addr))
 	for _, a := range list {

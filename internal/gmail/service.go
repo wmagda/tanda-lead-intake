@@ -73,6 +73,7 @@ func (s *Service) Start() {
 
 func (s *Service) loop() {
 	// Poll immediately on start, then on interval
+	s.retryFailed()
 	s.poll()
 
 	ticker := time.NewTicker(s.pollInterval)
@@ -82,11 +83,28 @@ func (s *Service) loop() {
 	for {
 		select {
 		case <-ticker.C:
+			s.retryFailed()
 			s.poll()
 		case <-s.stopCh:
 			log.Println("[gmail] polling stopped")
 			return
 		}
+	}
+}
+
+// retryFailed re-processes messages that failed AI parsing earlier (transient LM Studio
+// outage). Runs before each poll so recovered leads are ingested promptly.
+func (s *Service) retryFailed() {
+	ctx, cancel := context.WithTimeout(context.Background(), ai.RequestTimeout()+30*time.Second)
+	defer cancel()
+	maxRetries := parseutil.EnvInt("AI_RETRY_MAX_PER_POLL", 5)
+	n, err := ingest.RetryFailedMessages(ctx, s.pool.Pool, s.aiClient, maxRetries)
+	if err != nil {
+		log.Printf("[retry] error: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("[retry] re-processed %d previously-failed message(s)", n)
 	}
 }
 
