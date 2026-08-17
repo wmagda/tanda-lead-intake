@@ -255,4 +255,7 @@ Lovable should use the **Supabase JavaScript client** to:
 | Approved draft + task email send | Done |
 | Lovable `/admin/inbox` | Ready (schema + queries documented) |
 | Operational / vendor inbox (non-leads) | Not started |
-| Venmo / payments | Deferred |
+
+> **Venmo / payments** are tracked in a separate project
+> ([`venmo-ledger`](https://github.com/wmagda/venmo-ledger)) and are not part of
+> this repo.

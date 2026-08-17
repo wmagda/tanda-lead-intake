@@ -434,15 +434,15 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 	_, err := tx.Exec(ctx, `
 		insert into email_threads (id, lead_id, gmail_message_id, gmail_thread_id, sender_email, subject, body, received_at, status)
 		values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, now()), null)
-		on conflict (gmail_message_id) do update
+			on conflict (gmail_message_id) do update
 			set lead_id = $2::uuid,
 			    gmail_thread_id = excluded.gmail_thread_id,
 			    sender_email = excluded.sender_email,
 			    subject = excluded.subject,
 			    body = excluded.body,
-			    received_at = coalesce($8, received_at),
+			    received_at = coalesce($8, email_threads.received_at),
 			    status = null
-	`, threadUUID, leadID, msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body), receivedAt)
+		`, threadUUID, leadID, msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body), receivedAt)
 	if err != nil {
 		return Result{}, fmt.Errorf("thread insert: %w", err)
 	}

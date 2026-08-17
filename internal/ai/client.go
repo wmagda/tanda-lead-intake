@@ -372,7 +372,7 @@ func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body s
 	reqBody := ChatRequest{
 		Model:       c.Model,
 		Temperature: 0.2,
-		MaxTokens:   2048,
+		MaxTokens:   4096,
 
 		Messages: []ChatMessage{
 			{Role: "system", Content: SystemPrompt},
