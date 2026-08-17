@@ -16,6 +16,7 @@ import (
 
 func main() {
 	_ = godotenv.Load()
+	ai.LoadSystemPrompt() // loads external prompts/intake-system.prompt if present
 
 	pool, err := db.NewPool()
 	if err != nil {

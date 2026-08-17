@@ -32,6 +32,7 @@ import (
 
 func main() {
 	_ = godotenv.Load()
+	ai.LoadSystemPrompt() // loads external prompts/intake-system.prompt if present
 
 	threadID := flag.String("thread", "", "Gmail thread ID")
 	messageID := flag.String("message", "", "Gmail message ID")
@@ -71,7 +72,7 @@ func main() {
 			fmt.Printf("[%d] role=%s from=%q subject=%q\n", i+1, m.Role, m.From, m.Subject)
 			fmt.Println("---")
 			fmt.Println(m.Body)
-			fmt.Println("---\n")
+			fmt.Println("---")
 		}
 
 		formRelay := parseutil.IsFormRelay(*from)

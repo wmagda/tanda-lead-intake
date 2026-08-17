@@ -176,6 +176,18 @@ tanda-lead-intake/
 
 ---
 
+## System prompt
+
+The AI's intake instructions (studio details, pricing, phone, contact addresses)
+live in a **gitignored** file, `prompts/intake-system.prompt`, because this repo is
+public and that file contains private business information. It is loaded at startup
+via `AI_SYSTEM_PROMPT_FILE` (default `prompts/intake-system.prompt`).
+
+- A business-neutral template ships as `prompts/intake-system.prompt.example`.
+- Copy it to `prompts/intake-system.prompt` and fill in your real details.
+- If the file is missing, the worker uses a generic prompt so it still runs.
+- Never commit `prompts/intake-system.prompt` — it is gitignored on purpose.
+
 ## Environment variables
 
 | Variable | Required | Notes |
@@ -187,6 +199,7 @@ tanda-lead-intake/
 | `OPENAI_TIMEOUT` | no | Default `10m` — increase for slow local models |
 | `OPENAI_RETRY_MAX` | no | LLM retries on transient errors (default `3`) |
 | `OPENAI_RETRY_BASE` | no | Backoff base (default `2s`) |
+| `AI_SYSTEM_PROMPT_FILE` | no | Path to the intake system prompt (default `prompts/intake-system.prompt`); if missing a generic prompt is used |
 | `GMAIL_CREDENTIALS` | for Gmail | Path to OAuth client JSON |
 | `GMAIL_TOKEN` | for Gmail | Path to `token.json` |
 | `GMAIL_USER_EMAIL` | for Gmail | Inbox to monitor |

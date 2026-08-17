@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -166,21 +167,58 @@ func TestSystemPrompt_SizeOk(t *testing.T) {
 	}
 }
 
-func TestSystemPrompt_ContainsRequiredKeywords(t *testing.T) {
+// The in-repo default must stay business-neutral (no studio-specific facts),
+// because it ships in the public repo. Real business details live in the
+// gitignored prompts/ file loaded by LoadSystemPrompt.
+func TestDefaultSystemPrompt_BusinessNeutral(t *testing.T) {
+	// Reset to the shipped default (a previous test may have loaded the file).
+	ai.ResetSystemPromptForTest()
 	lower := strings.ToLower(ai.SystemPrompt)
-	required := []string{
-		"private_lesson", "group_class", "pricing",
-		"beginner", "intermediate", "advanced",
-		"salsa", "bachata",
-		"[STUDIO-EMAIL]",
-		"[STUDIO-ADDRESS]",
-		"$10",
-	}
-	for _, kw := range required {
-		if !strings.Contains(lower, strings.ToLower(kw)) {
-			t.Fatalf("SystemPrompt missing keyword: %s", kw)
+	for _, kw := range []string{
+		"@gmail.com", // no real contact address
+		"970",        // no real phone area code
+		"salsa collective", // no business name
+		"square.link",      // no payment link
+		"drake",            // no street address
+	} {
+		if strings.Contains(lower, kw) {
+			t.Fatalf("default SystemPrompt must be business-neutral but contains %q", kw)
 		}
 	}
+	// But it must still carry the JSON contract the parser depends on.
+	for _, kw := range []string{"is_lead", "customer_email", "intent", "draft", "private_lesson"} {
+		if !strings.Contains(lower, kw) {
+			t.Fatalf("default SystemPrompt missing required JSON keyword: %s", kw)
+		}
+	}
+}
+
+// LoadSystemPrompt swaps in the external prompt file when present, and keeps
+// the default otherwise.
+func TestLoadSystemPrompt_LoadsFileWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/intake.prompt"
+	if err := os.WriteFile(path, []byte("CUSTOM INTAKE PROMPT BODY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AI_SYSTEM_PROMPT_FILE", path)
+
+	ai.ResetSystemPromptForTest()
+	ai.LoadSystemPrompt()
+	if !strings.Contains(ai.SystemPrompt, "CUSTOM INTAKE PROMPT BODY") {
+		t.Fatalf("LoadSystemPrompt did not load external file; got: %.80s", ai.SystemPrompt)
+	}
+	ai.ResetSystemPromptForTest()
+}
+
+func TestLoadSystemPrompt_KeepsDefaultWhenFileMissing(t *testing.T) {
+	t.Setenv("AI_SYSTEM_PROMPT_FILE", "/nonexistent/intake.prompt")
+	ai.ResetSystemPromptForTest()
+	ai.LoadSystemPrompt()
+	if !strings.Contains(ai.SystemPrompt, "intake assistant") {
+		t.Fatalf("expected default prompt retained, got: %.80s", ai.SystemPrompt)
+	}
+	ai.ResetSystemPromptForTest()
 }
 
 func TestParseResult_IsLeadIntent(t *testing.T) {

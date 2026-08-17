@@ -63,7 +63,9 @@ func TestExtractPhoneFromBody(t *testing.T) {
 }
 
 func TestIsStudioPhone(t *testing.T) {
-	for _, p := range []string{"[STUDIO-PHONE]", "[STUDIO-PHONE]", "[STUDIO-PHONE]"} {
+	// Studio phone comes from STUDIO_PHONE env; use a placeholder in tests.
+	t.Setenv("STUDIO_PHONE", "(555) 010-9999")
+	for _, p := range []string{"(555) 010-9999", "555-010-9999", "+1 555 010 9999"} {
 		if !IsStudioPhone(p) {
 			t.Fatalf("expected studio phone %q", p)
 		}
@@ -71,10 +73,22 @@ func TestIsStudioPhone(t *testing.T) {
 	if IsStudioPhone("(269) 290-9011") {
 		t.Fatal("customer phone should not match studio")
 	}
+	if IsStudioPhone("") {
+		t.Fatal("empty should not match")
+	}
+}
+
+func TestIsStudioPhone_NoEnvNoMatch(t *testing.T) {
+	// With no STUDIO_PHONE set, nothing is treated as the studio line.
+	t.Setenv("STUDIO_PHONE", "")
+	if IsStudioPhone("(555) 010-9999") {
+		t.Fatal("with no STUDIO_PHONE, nothing should match")
+	}
 }
 
 func TestExtractPhoneFromBody_skipsStudio(t *testing.T) {
-	body := "Thanks!\n\nSalsa Collective\n[STUDIO-PHONE]\n\nOn Mon, Jane wrote:\nMy number is (269) 290-9011"
+	t.Setenv("STUDIO_PHONE", "(555) 010-9999")
+	body := "Thanks!\n\nSalsa Collective\n(555) 010-9999\n\nOn Mon, Jane wrote:\nMy number is (269) 290-9011"
 	got := ExtractPhoneFromBody(body)
 	if got == "" || IsStudioPhone(got) {
 		t.Fatalf("expected customer phone, got %q", got)

@@ -12,6 +12,10 @@ coverage.txt
 .env.local
 .env.*.local
 
+# Runtime prompt (contains private business details — never commit)
+prompts/*
+!prompts/intake-system.prompt.example
+
 # IDE
 .idea/
 .vscode/*

@@ -229,7 +229,8 @@ func ExtractContactFromFormBody(body string) (name, email string) {
 	if email == "" {
 		for _, m := range reMailto.FindAllStringSubmatch(body, -1) {
 			candidate := strings.ToLower(m[1])
-			if !strings.Contains(candidate, "[STUDIO-SLUG]") &&
+			local := studioEmailLocalPart()
+			if (local == "" || !strings.Contains(candidate, local)) &&
 				!strings.HasSuffix(candidate, "wordpress.com") {
 				email = candidate
 				break
@@ -246,8 +247,16 @@ func ExtractContactFromFormBody(body string) (name, email string) {
 	return name, email
 }
 
-// studioPhoneDigits is the normalized studio line [STUDIO-PHONE] — not a customer number.
-const studioPhoneDigits = "[STUDIO-PHONE]"
+// studioEmailLocalPart is the local part of the studio's own email (from
+// GMAIL_USER_EMAIL, e.g. "[STUDIO-SLUG]"), used to avoid extracting the
+// studio's own address as a customer's in form bodies. Empty when unset.
+func studioEmailLocalPart() string {
+	e := strings.ToLower(strings.TrimSpace(os.Getenv("GMAIL_USER_EMAIL")))
+	if i := strings.Index(e, "@"); i >= 0 {
+		return e[:i]
+	}
+	return e
+}
 
 // NormalizePhoneDigits strips a phone string to 10-digit US (or 11 with leading 1).
 func NormalizePhoneDigits(phone string) string {
@@ -264,10 +273,16 @@ func NormalizePhoneDigits(phone string) string {
 	return d
 }
 
-// IsStudioPhone is true for the studio's published contact line (and normalized variants).
+// IsStudioPhone is true for the studio's published contact line (and normalized
+// variants). The number is read from STUDIO_PHONE env (not hardcoded) so the
+// public repo contains no business phone. If unset, no number is treated as the
+// studio's.
 func IsStudioPhone(phone string) bool {
-	d := NormalizePhoneDigits(phone)
-	return d == studioPhoneDigits
+	digits := NormalizePhoneDigits(os.Getenv("STUDIO_PHONE"))
+	if digits == "" {
+		return false
+	}
+	return NormalizePhoneDigits(phone) == digits
 }
 
 // ExtractPhoneFromBody returns the first US-style phone that is not the studio line.
