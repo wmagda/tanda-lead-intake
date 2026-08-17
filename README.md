@@ -223,6 +223,10 @@ Lovable should use the **Supabase JavaScript client** to:
 - On **Approve**: set `approval_status=approved` (worker sends email and sets `sent_at`)
 - Manage `tasks` (`assignee_email`, `assigned_to`) and `leads.status`
 
+<img width="1451" height="711" alt="image" src="https://github.com/user-attachments/assets/4a77212b-9091-4bc0-bae6-d49386ca01ba" />
+<img width="1416" height="876" alt="Screenshot 2026-08-17 at 5 55 22 PM" src="https://github.com/user-attachments/assets/fcb04724-51fe-4869-81cf-711d3c50cdff" />
+
+
 ---
 
 ## Safety
