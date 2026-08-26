@@ -226,19 +226,34 @@ func FormatUpcomingEvents(events []UpcomingEvent) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// CalendarContext loads and formats the upcoming-events block. On any failure it
-// logs and returns "" so a calendar issue never blocks email ingestion.
+// CalendarContext builds the schedule context block for the LLM prompt. It ALWAYS
+// includes today's date (so the LLM can reason about "this week", "next week",
+// "this month"), plus the upcoming-events block when available. On calendar load
+// failure it still returns the date line, so a DB issue never leaves the LLM
+// without temporal grounding.
 func CalendarContext(ctx context.Context, pool *pgxpool.Pool) string {
+	now := time.Now().In(StudioTZ())
+
 	events, err := LoadUpcomingEvents(ctx, pool, CalendarLookaheadDays())
+	eventsBlock := ""
 	if err != nil {
-		log.Printf("[calendar] load failed (continuing without calendar context): %v", err)
-		return ""
-	}
-	block := FormatUpcomingEvents(events)
-	if block != "" {
+		log.Printf("[calendar] load failed (continuing with date only): %v", err)
+	} else if eventsBlock = FormatUpcomingEvents(events); eventsBlock != "" {
 		log.Printf("[calendar] injecting %d upcoming event(s) (%d days lookahead)", len(events), CalendarLookaheadDays())
 	}
-	return block
+
+	return FormatScheduleContext(now, eventsBlock)
+}
+
+// FormatScheduleContext renders the final block: today's date line (always) + events.
+func FormatScheduleContext(now time.Time, eventsBlock string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Today is %s (%s timezone).\n",
+		now.Format("Monday, January 2, 2006"), now.Location().String())
+	if eventsBlock != "" {
+		b.WriteString("\n" + eventsBlock)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func shortTime(s string) string {
