@@ -180,7 +180,9 @@ func LoadUpcomingEvents(ctx context.Context, pool *pgxpool.Pool, lookaheadDays i
 }
 
 // FormatUpcomingEvents renders events as a compact context block for the LLM prompt.
-// Returns "" when there is nothing to show.
+// Returns "" when there is nothing to show. Times are formatted AM/PM so drafts
+// naturally use AM/PM, and the block declares itself authoritative over other
+// details (so a conflict like a wrong time in thread history loses to the calendar).
 func FormatUpcomingEvents(events []UpcomingEvent) string {
 	if len(events) == 0 {
 		return ""
@@ -189,6 +191,7 @@ func FormatUpcomingEvents(events []UpcomingEvent) string {
 	var b strings.Builder
 	b.WriteString("## Upcoming studio events (schedule context)\n")
 	b.WriteString("Use this to answer questions about classes, lessons, performances, and socials. Do not invent events not listed here.\n")
+	b.WriteString("When an event below matches the question, its date and time are authoritative and override the 'Regular schedule' in the studio context and any times mentioned in the conversation. If the calendar has no event for what is asked, use the studio's 'Regular schedule' from the context.\n")
 	shown := 0
 	for _, e := range events {
 		if shown >= max {
@@ -197,9 +200,12 @@ func FormatUpcomingEvents(events []UpcomingEvent) string {
 		}
 		line := e.Date.Format("Mon 2006-01-02")
 		if e.Start != "" {
-			line += " " + e.Start
-			if e.End != "" && e.End != e.Start {
-				line += "-" + e.End
+			start := formatAmPm(e.Start)
+			if start != "" {
+				line += " " + start
+				if end := formatAmPm(e.End); end != "" && end != start {
+					line += " - " + end
+				}
 			}
 		}
 		line += " · " + e.Title
@@ -262,6 +268,22 @@ func shortTime(s string) string {
 		return s[:5]
 	}
 	return s
+}
+
+// formatAmPm converts a 24h "HH:MM" (or "HH:MM:SS") string to "h:mm AM/PM".
+// Returns "" for empty input, or the original string if it cannot be parsed.
+func formatAmPm(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		if t, err = time.Parse("15:04:05", s); err != nil {
+			return s
+		}
+	}
+	return t.Format("3:04 PM")
 }
 
 var weekdayIndex = map[string]time.Weekday{

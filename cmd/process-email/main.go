@@ -98,7 +98,15 @@ func main() {
 		formRelay := parseutil.IsFormRelay(*from)
 		voiceRelay := parseutil.IsGoogleVoiceRelay(*from, *subject, *body)
 		calendar := ingest.CalendarContext(ctx, pool.Pool)
-		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior, calendar)
+		fmt.Println("=== SYSTEM PROMPT + schedule context (first 3000 chars) ===")
+		sys := ai.SystemPrompt + ai.CalendarSystemSection(calendar)
+		if len(sys) > 3000 {
+			fmt.Println(sys[:3000])
+			fmt.Println("\n…[truncated for display]")
+		} else {
+			fmt.Println(sys)
+		}
+		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior)
 		fmt.Println("=== LLM user prompt preview (first 2000 chars) ===")
 		if len(preview) > 2000 {
 			fmt.Println(preview[:2000])
@@ -120,8 +128,16 @@ func main() {
 
 		fmt.Println("=== DRY RUN: no DB writes ===")
 		fmt.Printf("prior messages: %d\ncalendar context: %d chars\n\n", len(prior), len(calendar))
-		fmt.Println("=== LLM user prompt (first 4000 chars) ===")
-		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior, calendar)
+		fmt.Println("=== SYSTEM PROMPT + schedule context (first 4000 chars) ===")
+		sys := ai.SystemPrompt + ai.CalendarSystemSection(calendar)
+		if len(sys) > 4000 {
+			fmt.Println(sys[:4000])
+			fmt.Println("\n…[truncated for display]")
+		} else {
+			fmt.Println(sys)
+		}
+		fmt.Println("\n=== LLM user prompt (first 4000 chars) ===")
+		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior)
 		if len(preview) > 4000 {
 			fmt.Println(preview[:4000])
 			fmt.Println("\n…[truncated for display]")

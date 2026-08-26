@@ -96,8 +96,7 @@ type ConversationMessage struct {
 }
 
 // UserPrompt builds the per-email prompt. prior is optional thread history (oldest first).
-// calendarContext is an optional block of upcoming studio events (see ingest.CalendarContext).
-func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage, calendarContext string) string {
+func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage) string {
 	note := ""
 	switch {
 	case voiceRelay:
@@ -111,18 +110,25 @@ func UserPrompt(sender, subject, body string, formRelay, voiceRelay bool, prior 
 
 	history := formatConversationHistory(prior)
 
-	calendar := ""
-	if strings.TrimSpace(calendarContext) != "" {
-		calendar = "\n\n" + strings.TrimSpace(calendarContext)
-	}
-
-	return fmt.Sprintf(`%s%s%sIncoming email (envelope From) %q with subject %q:
+	return fmt.Sprintf(`%s%sIncoming email (envelope From) %q with subject %q:
 
 ---
 %s
 ---
 
-Return the JSON object now.`, note, history, calendar, sender, subject, body)
+Return the JSON object now.`, note, history, sender, subject, body)
+}
+
+// CalendarSystemSection renders the schedule context for the SYSTEM message
+// (appended after SystemPrompt), so it outranks anything in the user message and
+// any "Regular schedule" facts listed earlier in the system prompt. Returns ""
+// when calendarContext is empty.
+func CalendarSystemSection(calendarContext string) string {
+	s := strings.TrimSpace(calendarContext)
+	if s == "" {
+		return ""
+	}
+	return "\n\n" + s
 }
 
 func formatConversationHistory(prior []ConversationMessage) string {

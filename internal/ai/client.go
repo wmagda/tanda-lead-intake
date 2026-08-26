@@ -376,8 +376,8 @@ func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body s
 		MaxTokens:   4096,
 
 		Messages: []ChatMessage{
-			{Role: "system", Content: SystemPrompt},
-			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview, formRelay, voiceRelay, prior, calendarContext)},
+			{Role: "system", Content: SystemPrompt + CalendarSystemSection(calendarContext)},
+			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview, formRelay, voiceRelay, prior)},
 		},
 	}
 
