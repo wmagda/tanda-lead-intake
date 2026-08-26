@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -41,6 +42,7 @@ func main() {
 	body := flag.String("body", "", "Email body")
 	showContext := flag.Bool("show-context", false, "Print prior thread context + upcoming events and exit (no AI, no DB writes)")
 	showCalendar := flag.Bool("show-calendar", false, "Print the upcoming-events context block and exit (no AI, no DB writes)")
+	dryRun := flag.Bool("dry-run", false, "Run the full AI parse with current context but do NOT write to DB")
 	flag.Parse()
 
 	if *showCalendar {
@@ -104,6 +106,55 @@ func main() {
 		} else {
 			fmt.Println(preview)
 		}
+		return
+	}
+
+	if *dryRun {
+		ctx, cancel := context.WithTimeout(context.Background(), ai.RequestTimeout()+30*time.Second)
+		defer cancel()
+
+		prior := ingest.PreviewConversationContext(ctx, pool.Pool, msg)
+		formRelay := parseutil.IsFormRelay(*from)
+		voiceRelay := parseutil.IsGoogleVoiceRelay(*from, *subject, *body)
+		calendar := ingest.CalendarContext(ctx, pool.Pool)
+
+		fmt.Println("=== DRY RUN: no DB writes ===")
+		fmt.Printf("prior messages: %d\ncalendar context: %d chars\n\n", len(prior), len(calendar))
+		fmt.Println("=== LLM user prompt (first 4000 chars) ===")
+		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior, calendar)
+		if len(preview) > 4000 {
+			fmt.Println(preview[:4000])
+			fmt.Println("\n…[truncated for display]")
+		} else {
+			fmt.Println(preview)
+		}
+
+		aiClient := ai.NewClientFromEnv()
+		pr, err := aiClient.ParseExtracted(ctx, msg.From, msg.Subject, msg.Body, formRelay, voiceRelay, prior, calendar)
+		if err != nil {
+			log.Fatalf("dry-run AI parse: %v", err)
+		}
+
+		fmt.Println("\n=== LLM PARSE RESULT ===")
+		b, _ := json.MarshalIndent(struct {
+			IsLead        *bool    `json:"is_lead"`
+			CustomerEmail *string  `json:"customer_email"`
+			CustomerName  *string  `json:"customer_name"`
+			CustomerPhone *string  `json:"customer_phone"`
+			Intent        *string  `json:"intent"`
+			DanceStyle    *string  `json:"dance_style"`
+			Level         *string  `json:"level"`
+			StudentCount  *int     `json:"student_count"`
+			RequestedTime *string  `json:"requested_time"`
+			NeedsPricing  *bool    `json:"needs_pricing"`
+			Confidence    *float64 `json:"ai_confidence"`
+			Draft         string   `json:"draft"`
+		}{pr.IsLead, pr.CustomerEmail, pr.CustomerName, pr.CustomerPhone, pr.Intent,
+			pr.DanceStyle, pr.Level, pr.StudentCount, pr.RequestedTime, pr.NeedsPricing,
+			pr.Confidence, pr.Draft}, "", "  ")
+		fmt.Println(string(b))
+		fmt.Println("\n=== DRAFT ===")
+		fmt.Println(pr.Draft)
 		return
 	}
 
