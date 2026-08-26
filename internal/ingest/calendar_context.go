@@ -23,6 +23,10 @@ type UpcomingEvent struct {
 	Description string
 	IsCancelled bool
 	FromSeries  bool
+	// RangeEnd, when set, marks a break/closure series rendered as a full date
+	// range (e.g. "NO CLASSES - Summer Break: Aug 3 – Aug 31") instead of one
+	// occurrence date.
+	RangeEnd *time.Time
 }
 
 // StudioTZ returns the studio's local timezone (env CALENDAR_TZ, default America/Denver).
@@ -130,6 +134,28 @@ func LoadUpcomingEvents(ctx context.Context, pool *pgxpool.Pool, lookaheadDays i
 			return nil, fmt.Errorf("scan series: %w", err)
 		}
 		weekdays := normalizeDays(days)
+
+		// Break/closure series ("NO CLASSES - Summer Break!") are rendered as a
+		// full date range rather than individual occurrences, so the LLM knows
+		// the studio is closed for the whole period — not just the one date that
+		// falls inside the lookahead window.
+		if isBreakSeries(title) {
+			rangeEnd := end
+			if sEnd != nil {
+				rangeEnd = *sEnd
+			}
+			events = append(events, UpcomingEvent{
+				Date:        sStart,
+				Title:       title,
+				EventType:   etype,
+				Location:    locS,
+				Description: desc,
+				FromSeries:  true,
+				RangeEnd:    &rangeEnd,
+			})
+			continue
+		}
+
 		if len(weekdays) == 0 {
 			continue
 		}
@@ -183,6 +209,9 @@ func LoadUpcomingEvents(ctx context.Context, pool *pgxpool.Pool, lookaheadDays i
 // Returns "" when there is nothing to show. Times are formatted AM/PM so drafts
 // naturally use AM/PM, and the block declares itself authoritative over other
 // details (so a conflict like a wrong time in thread history loses to the calendar).
+// Events whose title signals a break/closure ("NO CLASSES", "break", "closed", …)
+// are rendered in a dedicated "Closed dates" section with an explicit instruction
+// that the studio does NOT hold classes those days.
 func FormatUpcomingEvents(events []UpcomingEvent) string {
 	if len(events) == 0 {
 		return ""
@@ -192,44 +221,105 @@ func FormatUpcomingEvents(events []UpcomingEvent) string {
 	b.WriteString("## Upcoming studio events (schedule context)\n")
 	b.WriteString("Use this to answer questions about classes, lessons, performances, and socials. Do not invent events not listed here.\n")
 	b.WriteString("When an event below matches the question, its date and time are authoritative and override the 'Regular schedule' in the studio context and any times mentioned in the conversation. If the calendar has no event for what is asked, use the studio's 'Regular schedule' from the context.\n")
-	shown := 0
+
+	var breaks, regular []UpcomingEvent
 	for _, e := range events {
+		if isBreakEvent(e) {
+			breaks = append(breaks, e)
+		} else {
+			regular = append(regular, e)
+		}
+	}
+
+	shown := 0
+	writeLine := func(line string) {
 		if shown >= max {
-			fmt.Fprintf(&b, "\n(+%d more events in this window — not listed)\n", len(events)-shown)
-			break
-		}
-		line := e.Date.Format("Mon 2006-01-02")
-		if e.Start != "" {
-			start := formatAmPm(e.Start)
-			if start != "" {
-				line += " " + start
-				if end := formatAmPm(e.End); end != "" && end != start {
-					line += " - " + end
-				}
-			}
-		}
-		line += " · " + e.Title
-		if e.Location != "" && e.Location != "TBD" {
-			line += " — " + e.Location
-		}
-		if e.EventType != "" {
-			line += " [" + e.EventType + "]"
-		}
-		if e.IsCancelled {
-			line += " (CANCELLED)"
-		} else if e.FromSeries {
-			line += " (recurring)"
+			return
 		}
 		b.WriteString(line + "\n")
 		shown++
-		if desc := strings.TrimSpace(e.Description); desc != "" && !strings.EqualFold(desc, e.Title) {
+	}
+	writeDesc := func(desc, title string) {
+		if desc = strings.TrimSpace(desc); desc != "" && !strings.EqualFold(desc, title) {
 			if len(desc) > 140 {
 				desc = desc[:140] + "…"
 			}
 			b.WriteString("    " + strings.ReplaceAll(desc, "\n", " ") + "\n")
 		}
 	}
+
+	if len(breaks) > 0 {
+		b.WriteString("\n### Closed dates (NO CLASSES / breaks)\n")
+		b.WriteString("The studio is CLOSED on the dates below — no classes or events are held those days. If the customer asks about attending on or near a closed date, tell them there are NO classes then, mention the break, and point to when classes resume (see each event's description). Never tell a customer classes are running on a closed date.\n")
+		for _, e := range breaks {
+			line := e.Date.Format("Mon 2006-01-02")
+			if e.RangeEnd != nil {
+				line = e.Date.Format("Mon 2006-01-02") + " – " + e.RangeEnd.Format("Mon 2006-01-02")
+			}
+			line += " · " + e.Title
+			writeLine(line)
+			writeDesc(e.Description, e.Title)
+		}
+	}
+
+	if len(regular) > 0 {
+		if len(breaks) > 0 {
+			b.WriteString("\n### Regular events\n")
+		}
+		for _, e := range regular {
+			if shown >= max {
+				fmt.Fprintf(&b, "\n(+%d more events in this window — not listed)\n", len(events)-shown)
+				break
+			}
+			line := e.Date.Format("Mon 2006-01-02")
+			if e.Start != "" {
+				start := formatAmPm(e.Start)
+				if start != "" {
+					line += " " + start
+					if end := formatAmPm(e.End); end != "" && end != start {
+						line += " - " + end
+					}
+				}
+			}
+			line += " · " + e.Title
+			if e.Location != "" && e.Location != "TBD" {
+				line += " — " + e.Location
+			}
+			if e.EventType != "" {
+				line += " [" + e.EventType + "]"
+			}
+			if e.IsCancelled {
+				line += " (CANCELLED)"
+			} else if e.FromSeries {
+				line += " (recurring)"
+			}
+			writeLine(line)
+			writeDesc(e.Description, e.Title)
+		}
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+var breakKeywords = []string{
+	"no classes", "no class", "no school", "summer break", "break",
+	"closed", "holiday", "vacation",
+}
+
+// isBreakEvent reports whether an event's title signals a closure/break
+// (e.g. "NO CLASSES - Summer Break!") rather than an actual class/event.
+func isBreakEvent(e UpcomingEvent) bool { return isBreakTitle(e.Title) }
+
+// isBreakSeries reports whether a series title signals a closure/break.
+func isBreakSeries(title string) bool { return isBreakTitle(title) }
+
+func isBreakTitle(title string) bool {
+	t := strings.ToLower(title)
+	for _, k := range breakKeywords {
+		if strings.Contains(t, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // CalendarContext builds the schedule context block for the LLM prompt. It ALWAYS
