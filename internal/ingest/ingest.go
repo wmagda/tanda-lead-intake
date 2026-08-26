@@ -76,9 +76,11 @@ func Process(ctx context.Context, pool *pgxpool.Pool, aiClient *ai.Client, msg M
 
 	parseCtx, parseCancel := context.WithTimeout(ctx, ai.RequestTimeout())
 	prior := loadConversationContext(ctx, pool, msg, formRelay)
-	log.Printf("[ingest] AI parse start msg=%s (timeout %s, prior_msgs=%d)", msg.GmailMessageID, ai.RequestTimeout(), len(prior))
+	calendarCtx := CalendarContext(ctx, pool)
+	log.Printf("[ingest] AI parse start msg=%s (timeout %s, prior_msgs=%d, calendar_events=%d chars)",
+		msg.GmailMessageID, ai.RequestTimeout(), len(prior), len(calendarCtx))
 	aiStart := time.Now()
-	pr, parseErr := aiClient.ParseExtracted(parseCtx, msg.From, msg.Subject, msg.Body, formRelay, voiceRelay, prior)
+	pr, parseErr := aiClient.ParseExtracted(parseCtx, msg.From, msg.Subject, msg.Body, formRelay, voiceRelay, prior, calendarCtx)
 	parseCancel()
 
 	var aiLead *models.Lead

@@ -236,7 +236,7 @@ func TestParseResult_IsLeadIntent(t *testing.T) {
 }
 
 func TestUserPrompt_ContainsSenderAndSubject(t *testing.T) {
-	p := ai.UserPrompt("alice@example.com", "Hello", "body text", false, false, nil)
+	p := ai.UserPrompt("alice@example.com", "Hello", "body text", false, false, nil, "")
 	if !strings.Contains(p, "alice@example.com") {
 		t.Error("UserPrompt should contain sender email")
 	}
@@ -253,7 +253,7 @@ func TestUserPrompt_IncludesConversationHistory(t *testing.T) {
 		{Role: "customer", From: "bob@example.com", Subject: "Lessons?", Body: "We want salsa lessons"},
 		{Role: "studio", Body: "Thanks for reaching out! Private lessons are [SOLO-RATE]."},
 	}
-	p := ai.UserPrompt("bob@example.com", "Re: Lessons?", "Tuesday works", false, false, prior)
+	p := ai.UserPrompt("bob@example.com", "Re: Lessons?", "Tuesday works", false, false, prior, "")
 	if !strings.Contains(p, "Conversation history") {
 		t.Fatal("expected conversation history section")
 	}
@@ -265,5 +265,26 @@ func TestUserPrompt_IncludesConversationHistory(t *testing.T) {
 	}
 	if !strings.Contains(p, "Tuesday works") {
 		t.Fatal("expected current message")
+	}
+}
+
+func TestUserPrompt_IncludesCalendarContext(t *testing.T) {
+	cal := "## Upcoming studio events (schedule context)\nUse this to answer questions about classes, lessons, performances, and socials. Do not invent events not listed here.\nMon 2026-09-11 21:00-22:00 · Team Performances at Avos [other]"
+	p := ai.UserPrompt("carol@example.com", "When is the next social?", "Is there a social this month?", false, false, nil, cal)
+	if !strings.Contains(p, "Upcoming studio events") {
+		t.Fatal("expected calendar context section")
+	}
+	if !strings.Contains(p, "Team Performances at Avos") {
+		t.Fatal("expected calendar event content")
+	}
+	if !strings.Contains(p, "When is the next social?") {
+		t.Fatal("expected incoming email subject")
+	}
+}
+
+func TestUserPrompt_OmitsEmptyCalendarContext(t *testing.T) {
+	p := ai.UserPrompt("carol@example.com", "Lessons?", "Do you teach bachata?", false, false, nil, "")
+	if strings.Contains(p, "Upcoming studio events") {
+		t.Fatal("empty calendar context should not add a section")
 	}
 }

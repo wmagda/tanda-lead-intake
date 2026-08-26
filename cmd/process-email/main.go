@@ -39,8 +39,26 @@ func main() {
 	from := flag.String("from", "", "From header")
 	subject := flag.String("subject", "", "Subject")
 	body := flag.String("body", "", "Email body")
-	showContext := flag.Bool("show-context", false, "Print prior thread context and exit (no AI, no DB writes)")
+	showContext := flag.Bool("show-context", false, "Print prior thread context + upcoming events and exit (no AI, no DB writes)")
+	showCalendar := flag.Bool("show-calendar", false, "Print the upcoming-events context block and exit (no AI, no DB writes)")
 	flag.Parse()
+
+	if *showCalendar {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		pool, err := db.NewPool()
+		if err != nil {
+			log.Fatalf("db: %v", err)
+		}
+		defer pool.Close()
+		block := ingest.CalendarContext(ctx, pool.Pool)
+		if block == "" {
+			fmt.Println("(no upcoming events in lookahead window)")
+		} else {
+			fmt.Println(block)
+		}
+		return
+	}
 
 	if *threadID == "" || *messageID == "" || *from == "" || *body == "" {
 		flag.Usage()
@@ -77,7 +95,8 @@ func main() {
 
 		formRelay := parseutil.IsFormRelay(*from)
 		voiceRelay := parseutil.IsGoogleVoiceRelay(*from, *subject, *body)
-		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior)
+		calendar := ingest.CalendarContext(ctx, pool.Pool)
+		preview := ai.UserPrompt(*from, *subject, *body, formRelay, voiceRelay, prior, calendar)
 		fmt.Println("=== LLM user prompt preview (first 2000 chars) ===")
 		if len(preview) > 2000 {
 			fmt.Println(preview[:2000])

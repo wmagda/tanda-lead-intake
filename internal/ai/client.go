@@ -297,8 +297,9 @@ func (c *Client) isDisabled() bool { return !c.isEnabled() }
 
 // ParseExtracted sends the email to the local LLM and returns structured parse output.
 // prior holds earlier thread messages (customer inbound + studio sent drafts) for follow-up context.
+// calendarContext is an optional block of upcoming studio events injected into the prompt.
 // Transient failures (HTTP 5xx, network, empty choices) are retried with backoff.
-func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage) (ParseResult, error) {
+func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage, calendarContext string) (ParseResult, error) {
 	var empty ParseResult
 	if c.BaseURL == "" {
 		return empty, fmt.Errorf("AI base URL not configured")
@@ -307,7 +308,7 @@ func (c *Client) ParseExtracted(ctx context.Context, sender, subject, body strin
 	maxAttempts := RetryMax()
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		pr, err := c.parseExtractedOnce(ctx, sender, subject, body, formRelay, voiceRelay, prior)
+		pr, err := c.parseExtractedOnce(ctx, sender, subject, body, formRelay, voiceRelay, prior, calendarContext)
 		if err == nil {
 			if attempt > 1 {
 				log.Printf("[ai] parse succeeded on attempt %d/%d", attempt, maxAttempts)
@@ -361,7 +362,7 @@ func truncateErr(err error, max int) string {
 	return s[:max] + "…"
 }
 
-func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage) (ParseResult, error) {
+func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body string, formRelay, voiceRelay bool, prior []ConversationMessage, calendarContext string) (ParseResult, error) {
 	var empty ParseResult
 
 	bodyPreview := body
@@ -376,7 +377,7 @@ func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body s
 
 		Messages: []ChatMessage{
 			{Role: "system", Content: SystemPrompt},
-			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview, formRelay, voiceRelay, prior)},
+			{Role: "user", Content: UserPrompt(sender, subject, bodyPreview, formRelay, voiceRelay, prior, calendarContext)},
 		},
 	}
 
