@@ -89,7 +89,47 @@ func lookupLeadIDForContext(ctx context.Context, pool *pgxpool.Pool, msg Message
 		return "", false
 	}
 	_, envelopeEmail := parseutil.SenderFrom(msg.From)
-	return lookupCanonicalLeadByEmailPool(ctx, pool, envelopeEmail)
+	if id, ok := lookupCanonicalLeadByEmailPool(ctx, pool, envelopeEmail); ok {
+		return id, true
+	}
+	// Google Voice contacts have no email and each SMS arrives on a fresh thread, so
+	// no thread/email match. The customer's phone appears in the message body — use it
+	// to pull the existing conversation so a follow-up text reads as a follow-up.
+	phone := parseutil.ExtractPhoneFromBody(msg.Subject + "\n" + msg.Body)
+	if phone != "" {
+		if id, ok := lookupCanonicalLeadByPhonePool(ctx, pool, phone); ok {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// lookupCanonicalLeadByPhonePool finds the canonical lead for a phone number
+// (most messages, then oldest) — the stable key for Google Voice contacts.
+func lookupCanonicalLeadByPhonePool(ctx context.Context, pool *pgxpool.Pool, phone string) (string, bool) {
+	digits := parseutil.NormalizePhoneDigits(phone)
+	if len(digits) > 10 {
+		digits = digits[len(digits)-10:]
+	}
+	if digits == "" {
+		return "", false
+	}
+	var id string
+	err := pool.QueryRow(ctx, `
+		select l.id::text
+		from leads l
+		where right(regexp_replace(l.customer_phone, '[^0-9]', '', 'g'), 10) = $1
+		order by (select count(*)::int from email_threads et where et.lead_id = l.id) desc,
+		         l.created_at asc
+		limit 1
+	`, digits).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) || id == "" {
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	return id, true
 }
 
 func lookupCanonicalLeadByEmailPool(ctx context.Context, pool *pgxpool.Pool, customerEmail string) (string, bool) {

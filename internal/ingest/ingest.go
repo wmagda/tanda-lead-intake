@@ -342,14 +342,27 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 
 	// Same customer often appears under a new Gmail thread after we send a standalone reply
 	// (e.g. form relay → sendNewEmail "From Salsa Collective" → customer replies on that thread).
-	if canonicalID, ok := lookupCanonicalLeadByEmail(ctx, tx, senderEmail); ok {
+	// For Google Voice contacts there is no email at all and every SMS lands on a fresh thread,
+	// so when the email lookup misses, fall back to the phone number (the stable key across texts).
+	canonicalID := ""
+	if id, ok := lookupCanonicalLeadByEmail(ctx, tx, senderEmail); ok {
+		canonicalID = id
 		if err := mergeDuplicateLeadsByEmail(ctx, tx, canonicalID, senderEmail); err != nil {
 			return Result{}, err
 		}
+	} else if customerPhone != "" {
+		if id, ok := lookupCanonicalLeadByPhone(ctx, tx, customerPhone); ok {
+			canonicalID = id
+			if err := mergeDuplicateLeadsByPhone(ctx, tx, canonicalID, customerPhone); err != nil {
+				return Result{}, err
+			}
+		}
+	}
+	if canonicalID != "" {
 		err := tx.QueryRow(ctx, `
 			update leads set
 				gmail_thread_id = $1,
-				customer_email = $2,
+				customer_email = coalesce(nullif($2, ''), customer_email),
 				customer_name  = coalesce($3, customer_name),
 				customer_phone = coalesce($4, customer_phone),
 				request_type   = $5,
@@ -384,8 +397,8 @@ func ingestInTx(ctx context.Context, tx pgx.Tx, msg Message,
 			return Result{}, fmt.Errorf("lead update (same customer): %w", err)
 		}
 		resultStatus = "updated"
-		log.Printf("[ingest] attached msg=%s to existing lead=%s (customer %s, gmail thread %s)",
-			msg.GmailMessageID, leadID, senderEmail, msg.GmailThreadID)
+		log.Printf("[ingest] attached msg=%s to existing lead=%s (customer %s, phone %s, gmail thread %s)",
+			msg.GmailMessageID, leadID, senderEmail, customerPhone, msg.GmailThreadID)
 	} else {
 		row := tx.QueryRow(ctx, `
 			insert into leads (
@@ -512,6 +525,36 @@ func KnownMessageIDs(ctx context.Context, pool *pgxpool.Pool, ids []string) (map
 	return known, rows.Err()
 }
 
+// lookupCanonicalLeadByPhone picks one lead per customer phone number (most
+// messages, then oldest). Google Voice contacts have no email and each inbound
+// SMS arrives on a fresh Gmail thread, so phone is the only stable key that
+// links follow-up texts to the existing lead.
+func lookupCanonicalLeadByPhone(ctx context.Context, tx pgx.Tx, phone string) (string, bool) {
+	digits := parseutil.NormalizePhoneDigits(phone)
+	if len(digits) > 10 {
+		digits = digits[len(digits)-10:]
+	}
+	if digits == "" {
+		return "", false
+	}
+	var id string
+	err := tx.QueryRow(ctx, `
+		select l.id::text
+		from leads l
+		where right(regexp_replace(l.customer_phone, '[^0-9]', '', 'g'), 10) = $1
+		order by (select count(*)::int from email_threads et where et.lead_id = l.id) desc,
+		         l.created_at asc
+		limit 1
+	`, digits).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) || id == "" {
+		return "", false
+	}
+	if err != nil {
+		return "", false
+	}
+	return id, true
+}
+
 // lookupCanonicalLeadByEmail picks one lead per customer inbox (most messages, then oldest).
 func lookupCanonicalLeadByEmail(ctx context.Context, tx pgx.Tx, customerEmail string) (string, bool) {
 	email := strings.ToLower(strings.TrimSpace(customerEmail))
@@ -534,6 +577,47 @@ func lookupCanonicalLeadByEmail(ctx context.Context, tx pgx.Tx, customerEmail st
 		return "", false
 	}
 	return id, true
+}
+
+// mergeDuplicateLeadsByPhone moves threads/drafts off duplicate lead rows keyed by
+// phone number and deletes them (same behavior as the email merge).
+func mergeDuplicateLeadsByPhone(ctx context.Context, tx pgx.Tx, canonicalID, phone string) error {
+	digits := parseutil.NormalizePhoneDigits(phone)
+	if len(digits) > 10 {
+		digits = digits[len(digits)-10:]
+	}
+	if digits == "" {
+		return nil
+	}
+	var merged int
+	if err := tx.QueryRow(ctx, `
+		with dupes as (
+			select id from leads
+			where right(regexp_replace(customer_phone, '[^0-9]', '', 'g'), 10) = $1
+			  and id <> $2::uuid
+		),
+		moved_threads as (
+			update email_threads set lead_id = $2::uuid
+			where lead_id in (select id from dupes)
+			returning 1
+		),
+		moved_drafts as (
+			update draft_responses set lead_id = $2::uuid
+			where lead_id in (select id from dupes)
+			returning 1
+		),
+		deleted as (
+			delete from leads where id in (select id from dupes)
+			returning 1
+		)
+		select (select count(*) from moved_threads) + (select count(*) from deleted)
+	`, digits, canonicalID).Scan(&merged); err != nil {
+		return fmt.Errorf("merge duplicate leads by phone: %w", err)
+	}
+	if merged > 0 {
+		log.Printf("[ingest] merged duplicate lead(s) for phone %s into lead=%s", phone, canonicalID)
+	}
+	return nil
 }
 
 // mergeDuplicateLeadsByEmail moves threads/drafts off duplicate lead rows and deletes them.
