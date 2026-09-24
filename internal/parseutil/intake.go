@@ -111,6 +111,7 @@ var (
 // Also includes txt.voice.google.com domain used for SMS replies.
 var googleVoiceSenders = []string{
 	"[VOICE-NOREPLY]",
+	"voice-noreply@google.com",
 	"sms-noreply@google.com",
 }
 

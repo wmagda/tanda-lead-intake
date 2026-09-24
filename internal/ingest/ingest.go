@@ -238,7 +238,7 @@ func recordSkipped(ctx context.Context, pool *pgxpool.Pool, msg Message, status 
 				set status = 'ai_failed',
 				    retry_count = email_threads.retry_count + 1,
 				    next_retry_at = least(
-				        now() + (interval '1 minute') * pow(2, email_threads.retry_count),
+				        now() + (interval '1 minute') * pow(2, least(email_threads.retry_count, 9)),
 				        now() + interval '6 hours'
 				    )
 		`, mustUUID(), msg.GmailMessageID, msg.GmailThreadID, envelopeEmail, orEmpty(msg.Subject), orEmpty(msg.Body))
