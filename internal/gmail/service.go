@@ -512,15 +512,15 @@ func isGoogleVoiceThread(leadID string, pool *db.Pool) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var senderEmail string
+	var senderEmail, subject string
 	err := pool.Pool.QueryRow(ctx,
-		`select sender_email from email_threads where lead_id = $1::uuid order by received_at limit 1`,
+		`select sender_email, coalesce(subject, '') from email_threads where lead_id = $1::uuid order by received_at limit 1`,
 		leadID,
-	).Scan(&senderEmail)
+	).Scan(&senderEmail, &subject)
 	if err != nil {
 		return "", false
 	}
-	if parseutil.IsGoogleVoiceRelay(senderEmail, "", "") {
+	if parseutil.IsGoogleVoiceRelay(senderEmail, subject, "") {
 		return senderEmail, true
 	}
 	return "", false
