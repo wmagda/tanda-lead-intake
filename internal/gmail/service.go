@@ -27,7 +27,6 @@ type Service struct {
 	pollInterval  time.Duration
 	sendInterval  time.Duration
 	stopCh        chan struct{}
-	lastPoll  time.Time
 	pollMu    sync.Mutex
 }
 
@@ -58,7 +57,6 @@ func NewPollingService(pool *db.Pool, aiClient *ai.Client) *Service {
 		pollInterval: pollInterval,
 		sendInterval: sendInterval,
 		stopCh:       make(chan struct{}),
-		lastPoll:     time.Now().Add(-parseutil.InitialLookback()),
 	}
 }
 
@@ -112,19 +110,16 @@ func (s *Service) poll() {
 	s.pollMu.Lock()
 	defer s.pollMu.Unlock()
 
-	since := s.lastPoll
+	// Gmail's search index (after:) is not realtime: a message arriving right before a
+	// poll can be missing from results for minutes. We therefore always search a fixed
+	// lookback window instead of an incremental watermark; KnownMessageIDs + ingest
+	// duplicate detection make re-fetching the overlap cheap and safe. Without this,
+	// a late-indexed message is permanently skipped once the watermark passes it.
+	since := time.Now().Add(-parseutil.InitialLookback())
 	messages, err := FetchNewMessages(s.gmailSvc, s.selfEmail, since)
 	if err != nil {
 		log.Printf("[gmail] fetch error: %v", err)
 		return
-	}
-
-	now := time.Now()
-	watermark := since
-	for _, msg := range messages {
-		if msg.Date.After(watermark) {
-			watermark = msg.Date
-		}
 	}
 
 	already, err := ingest.KnownMessageIDs(context.Background(), s.pool.Pool, messageIDs(messages))
@@ -137,9 +132,7 @@ func (s *Service) poll() {
 
 	total := len(toProcess)
 	if total == 0 {
-		log.Printf("[gmail] poll complete: 0 to process (%d fetched, watermark=%s)",
-			len(messages), watermark.Format(time.RFC3339))
-		s.advanceWatermark(watermark, now)
+		log.Printf("[gmail] poll complete: 0 to process (%d fetched, since=%s)", len(messages), since.Format(time.RFC3339))
 		return
 	}
 
@@ -197,18 +190,8 @@ func (s *Service) poll() {
 			n, total, result.Status, result.LeadID, result.Intent, result.Confidence, result.DraftID != nil)
 	}
 
-	s.advanceWatermark(watermark, now)
-	log.Printf("[gmail] poll complete: %d processed, %d ingested, %d duplicate, %d skipped, %d error (next after %s)",
-		total, ingested, duplicates, skipped, errors, s.lastPoll.Format(time.RFC3339))
-}
-
-func (s *Service) advanceWatermark(watermark, now time.Time) {
-	next := now
-	if watermark.After(next) {
-		next = watermark
-	}
-	// Gmail after: is exclusive; bump 1s so we don't re-fetch the last message.
-	s.lastPoll = next.Add(time.Second)
+	log.Printf("[gmail] poll complete: %d processed, %d ingested, %d duplicate, %d skipped, %d error (since %s)",
+		total, ingested, duplicates, skipped, errors, since.Format(time.RFC3339))
 }
 
 func messageIDs(msgs []FetchedMessage) []string {

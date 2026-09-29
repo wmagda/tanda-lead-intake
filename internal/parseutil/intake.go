@@ -33,8 +33,8 @@ func IntakeExtraQuery() string {
 	return strings.TrimSpace(os.Getenv("GMAIL_INTAKE_QUERY"))
 }
 
-// InitialLookback is how far back the worker searches on first start (env GMAIL_INITIAL_LOOKBACK).
-// Examples: 24h, 168h, 7d. Default 24h. Only applies when the process starts; later polls are incremental.
+// InitialLookback is how far back every poll searches (env GMAIL_INITIAL_LOOKBACK).
+// Examples: 24h, 168h, 7d. Default 24h. Applied on every poll (not just startup) to dodge Gmail search-index lag.
 func InitialLookback() time.Duration {
 	const defaultLookback = 24 * time.Hour
 	s := strings.TrimSpace(os.Getenv("GMAIL_INITIAL_LOOKBACK"))
