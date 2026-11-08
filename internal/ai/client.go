@@ -392,6 +392,9 @@ func (c *Client) parseExtractedOnce(ctx context.Context, sender, subject, body s
 		return empty, fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Cloudflare blocks Go's default "Go-http-client" User-Agent at the upstream
+	// inference API, so present a standard client UA.
+	req.Header.Set("User-Agent", "tanda-lead-intake/1.0")
 	if apiKey := os.Getenv("OPENAI_API_KEY"); apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
